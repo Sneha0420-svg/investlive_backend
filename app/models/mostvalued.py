@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, Date
 from app.database import Base
 
 class Mostvalued(Base):
-    __tablename__ = "mostvaluedhouse/stock"
+    __tablename__ = "mostvalueddata"
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -20,10 +20,10 @@ class Mostvalued(Base):
     type = Column(String, nullable=False)
 
 class MostValuedupload(Base):
-    __tablename__ = "mostvaluedhouse/stock_uploads"
+    __tablename__ = "mostvaluedfiles"
 
     id = Column(Integer, primary_key=True, index=True)
-
+    name= Column(String, nullable=False)
     upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(100), nullable=False)

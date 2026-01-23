@@ -62,6 +62,7 @@ async def upload_multiple_data(
 
         # Save metadata
         upload_record = MostValuedupload(
+            name=name,
             upload_date=upload_date,
             data_date=data_date,
             data_type=data_type,
@@ -119,6 +120,7 @@ async def upload_multiple_data(
 
         # Save metadata
         upload_record = MostValuedupload(
+            name=name,
             upload_date=upload_date,
             data_date=data_date,
             data_type=data_type,
@@ -150,6 +152,7 @@ async def upload_multiple_data(
         for _, row in df.iterrows():
             all_records.append(
                 Mostvalued(
+                    
                     name=name,
                     company=row["company"],
                     day=float(row["day"]),
@@ -190,6 +193,7 @@ def get_uploads(db: Session = Depends(get_db)):
     return [
         {
             "id": u.id,
+            "name":u.name,
             "upload_date": u.upload_date,
             "data_date": u.data_date,
             "data_type": u.data_type,

@@ -228,7 +228,8 @@ def get_stocks(db: Session = Depends(get_db)):
         1: "Returns",
         2: "Indices",
         3: "Currencies",
-        4: "Commodities"
+        4:"World P/E Ratio",
+        5: "Commodities"
     }
 
     # Section headers for each tab
@@ -236,7 +237,7 @@ def get_stocks(db: Session = Depends(get_db)):
         1: ["India Stocks", "Bullion", "Forex vs INR", "Crude"],
         2: ["BRICS", "Asia/Pacific", "America/Europe"],
         3: ["INR vs.", "USD vs."],
-        4: ["Metals (Kg)", "Agro-Indu (100 Kg)"]
+        5: ["Metals (Kg)", "Agro-Indu (100 Kg)"]
     }
 
     # Initialize result dict
