@@ -2,6 +2,8 @@ from app.database import Base, engine
 from app.models.marketind import StockData,MarketIndicatorUpload   # import your model modules here
 from app.models.instocktrend import InstockTrendData,Indstocktrendupload
 from app.models.mostvalued import Mostvalued,MostValuedupload
+from app.models.ipoevents import IpoEvent
+from app.models.heatmap import Upload,HeatMap
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
