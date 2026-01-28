@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.marketind import router as marketind_router
 from app.routes.instocktrend import router as indstocktrend_router
 from app.routes.mostvalued import router as mostvaluedhouse_router
-from app.routes.ipoevents import router as ipo_events_router 
+from app.routes.volumetrade import router as volumetrade_router 
 from app.routes.heatmap import router as heatmap_router
+from app.routes.ipo import router as ipo_router
 
 app = FastAPI(
     title="Investlive API's",
@@ -32,5 +33,6 @@ def read_root():
 app.include_router(marketind_router)
 app.include_router(indstocktrend_router)
 app.include_router(mostvaluedhouse_router)
-app.include_router(ipo_events_router)
+app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
+app.include_router(ipo_router)
