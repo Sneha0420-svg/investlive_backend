@@ -5,6 +5,7 @@ from app.models.mostvalued import Mostvalued,MostValuedupload
 from app.models.heatmap import Upload,HeatMap
 from app.models.ipo import DataUpload,IPOUpload
 from app.models.volumetrade import VolumeTradevolume,VolumeTradevalue,VolumeTradetrade,VolumeTradeUpload
+from app.models.ipoheatmap import IPOHeatmapYear,IPOHeatmapYearUpload,IPOHeatmapData,IPOHeatmapDataUpload
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
