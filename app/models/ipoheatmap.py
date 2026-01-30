@@ -9,7 +9,7 @@ class IPOHeatmapYear(Base):
     __tablename__ = "ipo_heatmap_yearwise"
 
     id = Column(Integer, primary_key=True, index=True)
-    year = Column(Integer, nullable=False, index=True)
+    year = Column(Integer,  unique=True, index=True)
     cos = Column(Integer)
     ipo_value = Column(Float)
     market_value = Column(Float)
@@ -37,7 +37,7 @@ class IPOHeatmapData(Base):
     __tablename__ = "ipo_heatmap_data"
 
     id = Column(Integer, primary_key=True, index=True)
-    company = Column(String(255), nullable=False, index=True)
+    company = Column(String(255), index=True)
     iss_open = Column(Date)
     offer_price = Column(Float)
     cmp = Column(Float)
