@@ -7,6 +7,8 @@ from app.models.ipo import DataUpload,IPOUpload
 from app.models.volumetrade import VolumeTradevolume,VolumeTradevalue,VolumeTradetrade,VolumeTradeUpload
 from app.models.ipoheatmap import IPOHeatmapYear,IPOHeatmapYearUpload,IPOHeatmapData,IPOHeatmapDataUpload
 from app.models.news import News
+from app.models.announcement import Announcement
+from app.models.stockpulse import StockPulseData, StockPulseUpload
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models

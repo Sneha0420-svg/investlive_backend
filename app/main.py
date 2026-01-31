@@ -8,6 +8,8 @@ from app.routes.heatmap import router as heatmap_router
 from app.routes.ipo import router as ipo_router
 from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
+from app.routes.announcement import router as announcement_router
+from app.routes.stockpulse import router as stockpulse_router
 from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
@@ -36,7 +38,9 @@ app.add_middleware(
 def read_root():
     return {"message": "Backend run successfully"}
 app.include_router(news_router)
+app.include_router(announcement_router)
 app.include_router(marketind_router)
+app.include_router(stockpulse_router)
 app.include_router(indstocktrend_router)
 app.include_router(mostvaluedhouse_router)
 app.include_router(volumetrade_router)
