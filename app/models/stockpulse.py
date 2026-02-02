@@ -59,3 +59,7 @@ class StockPulseData(Base):
 
     data_date = Column(Date, nullable=True)
     type = Column(String, nullable=True)
+    upload_date = Column(Date, nullable=False)  # new
+    data_date = Column(Date, nullable=False)    # new
+    
+    
