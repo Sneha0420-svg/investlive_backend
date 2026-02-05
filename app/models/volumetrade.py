@@ -3,7 +3,7 @@ from app.database import Base
 
 # Tab 1 Table
 class VolumeTradevolume(Base):
-    __tablename__ = "volumetrade_tab1"
+    __tablename__ = "top_volume"
 
     id = Column(Integer, primary_key=True, index=True)
     upload_date = Column(Date, nullable=False)
@@ -25,7 +25,7 @@ class VolumeTradevolume(Base):
 
 # Tab 2 Table
 class VolumeTradevalue(Base):
-    __tablename__ = "volumetrade_tab2"
+    __tablename__ = "top_value"
 
     id = Column(Integer, primary_key=True, index=True)
     upload_date = Column(Date, nullable=False)
@@ -47,7 +47,7 @@ class VolumeTradevalue(Base):
 
 # Tab 3 Table
 class VolumeTradetrade(Base):
-    __tablename__ = "volumetrade_tab3"
+    __tablename__ = "top_trade"
 
     id = Column(Integer, primary_key=True, index=True)
     upload_date = Column(Date, nullable=False)

@@ -1,16 +1,12 @@
-from sqlalchemy import Column, Integer, Numeric, String, SmallInteger,Date,BigInteger
+from sqlalchemy import Column, Integer, Numeric, String, SmallInteger,Date
 from app.database import Base
 
 
 class Company(Base):
     __tablename__ = "company"
 
-    # ✅ NEW AUTO PRIMARY KEY
-    pk_id = Column(BigInteger, primary_key=True, autoincrement=True)
-
-    # ✅ CSV ID (can be duplicate)
-    ID = Column(Integer, index=True)
-    RANK= Column(Integer, index=True)
+    ID = Column(Integer, primary_key=True, autoincrement=True)
+    RNK = Column(Integer, nullable=False)
     COMPANY = Column(String(25))
     MCAP = Column(Numeric(20, 2), nullable=False)
     DAYCHCR = Column(Numeric(20, 2))
@@ -44,7 +40,7 @@ class Company(Base):
     INDUSTRY = Column(String(45))
     IND_RNK = Column(Integer, nullable=False)
     IH_MCODE = Column(Numeric(20, 6), nullable=False)
-    IH_MNAME = Column(String(50), nullable=True)
+    IH_MNAME = Column(String(50), nullable=False)
     HOU_RNK = Column(Integer, nullable=False)
     COMPANY_NAME = Column(String(100))
     BSE = Column(String(10))
@@ -63,49 +59,32 @@ class Company(Base):
 class House(Base):
     __tablename__ = "house"
 
-    # ✅ NEW AUTO PRIMARY KEY
-    pk_id = Column(BigInteger, primary_key=True, autoincrement=True)
-
-    # ✅ CSV ID (can be duplicate)
-    ID = Column(Integer, index=True)
-
+    ID = Column(Integer, primary_key=True, autoincrement=True)
     RNK = Column(Integer, nullable=False)
     IH_PR = Column(Numeric(10, 6), nullable=False)
     IH_AF = Column(Numeric(10, 6), nullable=False)
     HOUSE = Column(String(50))
-    COS = Column(String(100))
-
+    COS = Column(Integer)
     MCAP = Column(Numeric(20, 2))
     DAYCHCR = Column(Numeric(20, 2))
     CH = Column(Numeric(20, 1))
-
     FFLOAT = Column(Numeric(20, 2), nullable=False)
     FFRNK = Column(Integer, nullable=False)
-
     WKCHCR = Column(Numeric(20, 2))
     WKCH = Column(Numeric(20, 1))
-
     MTHCHCR = Column(Numeric(20, 2))
     MTHCH = Column(Numeric(20, 1))
-
     QTRCHCR = Column(Numeric(20, 2))
     QTRCH = Column(Numeric(20, 1))
-
     HYCHCR = Column(Numeric(20, 2))
     HYCH = Column(Numeric(20, 1))
-
     YRCHCR = Column(Numeric(20, 2))
-    YRCH = Column(Numeric(20, 1))
     YRCH = Column(Numeric(20, 1))
 
 class Industry(Base):
     __tablename__ = "industry"
 
-    # ✅ NEW AUTO PRIMARY KEY
-    pk_id = Column(BigInteger, primary_key=True, autoincrement=True)
-
-    # ✅ CSV ID (can be duplicate)
-    ID = Column(Integer, index=True)
+    ID = Column(Integer, primary_key=True, autoincrement=True)
     RNK = Column(Integer, nullable=False)
     INDUSTRY = Column(String(45))
     COS = Column(Integer)
@@ -126,28 +105,8 @@ class Industry(Base):
     YRCH = Column(Numeric(20, 1))
     SECID = Column(String(45), nullable=False)
     ISCCODE = Column(String(45), nullable=False)
-class CompanyUpload(Base):
-    __tablename__ = "company_upload"
-
-    id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(String(36), index=True, nullable=False)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
-    data_type = Column(String(100), nullable=False) 
-    file_name = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=False)  
-class HouseUpload(Base):
-    __tablename__ = "house_upload"
-
-    id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(String(36), index=True, nullable=False)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
-    data_type = Column(String(100), nullable=False) 
-    file_name = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=False) 
-class IndustryUpload(Base):
-    __tablename__ = "industry_upload"
+class HeatmapUpload(Base):
+    __tablename__ = "heatmap_upload"
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True, nullable=False)

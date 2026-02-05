@@ -1,50 +1,29 @@
 from pydantic import BaseModel
-from typing import List, Optional
 from datetime import date
 
-class HeatMapBase(BaseModel):
-    rank:int
-    name: str
-    cos: Optional[int]
-    mcap: Optional[int]
-    daych: Optional[int]
-    daychper: Optional[float]
-    ffltmcap: Optional[int]
-    ffltrank: Optional[int]
-    wkch: Optional[int]
-    wkchper: Optional[float]
-    mthch: Optional[int]
-    mthchper: Optional[float]
-    qtrch: Optional[int]
-    qtrchper: Optional[float]
-    hrch: Optional[int]
-    hrchper: Optional[float]
-    yrch: Optional[int]
-    yrchper: Optional[float]
-
-class HeatMapCreate(HeatMapBase):
-    upload_id: int
-
-class HeatMapOut(HeatMapBase):
-    id: int
-    upload_id: int
-
-    class Config:
-        orm_mode = True
-
+# Base schema with common fields and orm_mode
 class UploadBase(BaseModel):
-    uploading_date: date
-    data_date: date
-    value: str
-    filename: str
-    file_path:str
-
-class UploadCreate(UploadBase):
-    pass
-
-class UploadOut(UploadBase):
     id: int
-    heatmapvalues: List[HeatMapOut] = []
+    group_id: str
+    upload_date: date
+    data_date: date
+    data_type: str
+    file_name: str
+    file_path: str
 
     class Config:
         orm_mode = True
+
+# Schema for creating a new upload (optional if needed)
+class UploadCreate(BaseModel):
+    upload_date: date
+    data_date: date
+    data_type: str
+    file_name: str
+    file_path: str
+
+# Schema for returning a response after upload
+class UploadResponse(BaseModel):
+    status: str
+    uploaded_file: str
+    data_type: str

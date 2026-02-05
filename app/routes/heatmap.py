@@ -1,25 +1,76 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy.exc import SQLAlchemyError
+from app.database import SessionLocal
+from app.models.heatmap import (
+    HouseUpload,
+    CompanyUpload,
+    IndustryUpload,
+    House,
+    Company,
+    Industry,
+)
+import pandas as pd
+import uuid
+import shutil
+import os
+from datetime import datetime
 from typing import List
 from datetime import date
-import os
-import pandas as pd
-import math
-from fastapi.responses import FileResponse
+from app.schemas.heatmap import UploadBase
 
-from app.models.heatmap import Upload as UploadModel, HeatMap as HeatMapModel
-from app.schemas.heatmap import UploadOut, HeatMapOut
-from app.database import SessionLocal
+router = APIRouter(prefix="/heatmap", tags=["heatmap"])
 
-router = APIRouter(
-    prefix="/Heatmap",
-    tags=["Heatmap"]
-)
+UPLOAD_FOLDER = "uploads/heatmap"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-UPLOAD_DIR = "uploads/heatmap"  # forward slashes for cross-platform
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# ---------------- Model + Upload mapping ----------------
+TABLE_MAP = {
+    "company": (Company, CompanyUpload),
+    "house": (House, HouseUpload),
+    "industry": (Industry, IndustryUpload),
+}
+UPLOAD_TABLES = {
+    "company": CompanyUpload,
+    "house": HouseUpload,
+    "industry": IndustryUpload,
+}
 
+# ---------------- CSV column order (NO HEADERS) ----------------
+COMPANY_COLUMNS = [
+    "ID","RANK", "COMPANY", "MCAP", "DAYCHCR", "CH", "FFLOAT", "FFRNK",
+    "WKCHCR", "WKCH", "MTHCHCR", "MTHCH", "QTRCHCR", "QTRCH",
+    "HYCHCR", "HYCH", "YRCHCR", "YRCH", "CMP", "PCL", "CH_RS",
+    "CH_PER", "OPEN", "HIGH", "LOW", "CLOSE", "VOL", "VALUE",
+    "TRADE", "ISIN", "SEC_ID", "ISCCODE", "INDUSTRY", "IND_RNK",
+    "IH_MCODE", "IH_MNAME", "HOU_RNK", "COMPANY_NAME", "BSE",
+    "NSE", "INDEX_STK", "RONW", "ROCE", "EPS", "CEPS", "P_E",
+    "P_CE", "DIV", "YLD", "DEBT_EQ",
+]
+
+HOUSE_COLUMNS = [
+    "ID", "RNK", "IH_PR", "IH_AF", "HOUSE", "COS",
+    "MCAP", "DAYCHCR", "CH", "FFLOAT", "FFRNK",
+    "WKCHCR", "WKCH", "MTHCHCR", "MTHCH",
+    "QTRCHCR", "QTRCH", "HYCHCR", "HYCH",
+    "YRCHCR", "YRCH",
+]
+
+INDUSTRY_COLUMNS = [
+    "ID", "RNK", "INDUSTRY", "COS", "MCAP", "DAYCHCR", "CH",
+    "FFLOAT", "FFRNK", "WKCHCR", "WKCH",
+    "MTHCHCR", "MTHCH", "QTRCHCR", "QTRCH",
+    "HYCHCR", "HYCH", "YRCHCR", "YRCH",
+    "SECID", "ISCCODE",
+]
+
+COLUMN_MAP = {
+    "company": COMPANY_COLUMNS,
+    "house": HOUSE_COLUMNS,
+    "industry": INDUSTRY_COLUMNS,
+}
+
+# ---------------- DB Dependency ----------------
 def get_db():
     db = SessionLocal()
     try:
@@ -27,175 +78,295 @@ def get_db():
     finally:
         db.close()
 
-# ----------------- HELPER FUNCTIONS -----------------
-def heatmap_to_dict(heatmap_row):
-    """
-    Convert HeatMap SQLAlchemy row to dict, replacing any NaN float with None.
-    """
-    result = {}
-    for column in heatmap_row.__table__.columns:
-        value = getattr(heatmap_row, column.name)
-        if isinstance(value, float) and math.isnan(value):
-            result[column.name] = None
-        else:
-            result[column.name] = value
-    return result
 
-def replace_nan_recursive(obj):
-    """
-    Recursively replace NaN in nested dicts/lists with None.
-    """
-    if isinstance(obj, list):
-        return [replace_nan_recursive(x) for x in obj]
-    elif isinstance(obj, dict):
-        return {k: replace_nan_recursive(v) for k, v in obj.items()}
-    elif isinstance(obj, float) and math.isnan(obj):
-        return None
-    else:
-        return obj
-
-# ----------------- UPLOAD FILE -----------------
-@router.post("/file/", response_model=UploadOut)
+# ---------------- Upload API ----------------
+@router.post("/upload/")
 async def upload_file(
-    uploading_date: date = Form(...),
-    data_date: date = Form(...),
-    value: str = Form(...),
+    upload_date: str = Form(...),
+    data_date: str = Form(...),
+    data_type: str = Form(...),
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    try:
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        filename = file.filename
-        file_path = os.path.join(UPLOAD_DIR, filename)
+    data_type = data_type.lower()
 
-        # Save uploaded file
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-
-        # Create Upload record
-        db_upload = UploadModel(
-            uploading_date=uploading_date,
-            data_date=data_date,
-            value=value,
-            filename=filename,
-            file_path=file_path
+    if data_type not in TABLE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid data_type. Use company, house, or industry.",
         )
-        db.add(db_upload)
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files allowed")
+
+    Model, UploadModel = TABLE_MAP[data_type]
+    expected_columns = COLUMN_MAP[data_type]
+
+    # ---------- Save file ----------
+    file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.csv")
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    upload_date = datetime.strptime(upload_date, "%Y-%m-%d").date()
+    data_date = datetime.strptime(data_date, "%Y-%m-%d").date()
+
+    # ---------- Save upload metadata ----------
+    upload_entry = UploadModel(
+        group_id=str(uuid.uuid4()),
+        upload_date=upload_date,
+        data_date=data_date,
+        data_type=data_type,
+        file_name=file.filename,
+        file_path=file_path,
+    )
+    db.add(upload_entry)
+    db.commit()
+
+    # ---------- Read CSV (NO HEADERS) ----------
+    try:
+        df = pd.read_csv(file_path, header=None, encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(file_path, header=None, encoding="latin1")
+
+    if df.shape[1] != len(expected_columns):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{data_type} CSV column mismatch: "
+                f"expected {len(expected_columns)}, got {df.shape[1]}"
+            ),
+        )
+
+    df.columns = expected_columns
+    df = df.where(pd.notnull(df), None)
+
+    model_columns = set(Model.__table__.columns.keys())
+    objects = []
+
+    for _, row in df.iterrows():
+        record = {
+            col: row[col]
+            for col in expected_columns
+            if col in model_columns and col != "pk_id"
+        }
+        objects.append(Model(**record))
+
+    if not objects:
+        raise HTTPException(status_code=400, detail="No valid rows found")
+
+    # ---------- Bulk insert ----------
+    try:
+        db.bulk_save_objects(objects)
         db.commit()
-        db.refresh(db_upload)
-
-        # Read CSV or Excel (no header)
-        if file.filename.endswith(".csv"):
-            df = pd.read_csv(file_path, header=None)
-        else:
-            df = pd.read_excel(file_path, header=None, engine="openpyxl")
-
-        # Select relevant columns
-        cols_to_keep = [0] + list(range(4, df.shape[1]))
-        df = df.iloc[:, cols_to_keep]
-
-        df.columns = [
-            "rank",
-            "name", "cos", "mcap", "daych", "daychper", "ffltmcap", "ffltrank",
-            "wkch", "wkchper", "mthch", "mthchper", "qtrch", "qtrchper",
-            "hrch", "hrchper", "yrch", "yrchper"
-        ]
-
-        # Insert HeatMap rows
-        for _, row in df.iterrows():
-            db_heat = HeatMapModel(
-                upload_id=db_upload.id,
-                rank=int(row["rank"]),
-                name=str(row["name"]),
-                cos=int(row["cos"]) if pd.notnull(row["cos"]) else None,
-                mcap=int(row["mcap"]) if pd.notnull(row["mcap"]) else None,
-                daych=int(row["daych"]) if pd.notnull(row["daych"]) else None,
-                daychper=float(row["daychper"]) if pd.notnull(row["daychper"]) else None,
-                ffltmcap=int(row["ffltmcap"]) if pd.notnull(row["ffltmcap"]) else None,
-                ffltrank=int(row["ffltrank"]) if pd.notnull(row["ffltrank"]) else None,
-                wkch=int(row["wkch"]) if pd.notnull(row["wkch"]) else None,
-                wkchper=float(row["wkchper"]) if pd.notnull(row["wkchper"]) else None,
-                mthch=int(row["mthch"]) if pd.notnull(row["mthch"]) else None,
-                mthchper=float(row["mthchper"]) if pd.notnull(row["mthchper"]) else None,
-                qtrch=int(row["qtrch"]) if pd.notnull(row["qtrch"]) else None,
-                qtrchper=float(row["qtrchper"]) if pd.notnull(row["qtrchper"]) else 0.00,
-                hrch=int(row["hrch"]) if pd.notnull(row["hrch"]) else None,
-                hrchper=float(row["hrchper"]) if pd.notnull(row["hrchper"]) else None,
-                yrch=int(row["yrch"]) if pd.notnull(row["yrch"]) else None,
-                yrchper=float(row["yrchper"]) if pd.notnull(row["yrchper"]) else None
-            )
-            db.add(db_heat)
-
-        db.commit()
-        db.refresh(db_upload)
-
-        return db_upload
-
-    except Exception as e:
+    except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ----------------- GET ALL UPLOADS -----------------
-@router.get("/", response_model=List[UploadOut])
-def get_uploads(db: Session = Depends(get_db)):
-    return db.query(UploadModel).all()
-
-
-# ----------------- DOWNLOAD FILE -----------------
-@router.get("/download/{upload_id}")
-def download_heatmap_file(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
-    if not upload:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    if not os.path.exists(upload.file_path):
-        raise HTTPException(status_code=404, detail="File not found on server")
-
-    return FileResponse(path=upload.file_path, filename=upload.filename, media_type='application/octet-stream')
-
-
-# ----------------- GET SINGLE UPLOAD -----------------
-@router.get("/{upload_id}", response_model=UploadOut)
-def get_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
-    if not upload:
-        raise HTTPException(status_code=404, detail="Upload not found")
-    return upload
-
-
-# ----------------- GET LATEST HEATMAP DATA -----------------
-@router.get("/latest", response_model=List[HeatMapOut])
-def get_latest_heatmap_data(
-    value: str = None,
-    db: Session = Depends(get_db)
-):
-    query = db.query(UploadModel)
-    if value:
-        query = query.filter(UploadModel.value == value)
+    return {
+        "status": "success",
+        "data_type": data_type,
+        "file": file.filename,
+        "rows_inserted": len(objects),
+    }
+# Get all uploads
+@router.get("/{data_type}/", response_model=List[UploadBase])
+def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
     
-    latest_upload = query.order_by(desc(UploadModel.data_date)).first()
+    UploadModel = UPLOAD_TABLES[data_type]
+    uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+    return uploads  # Pydantic will handle conversion automatically
+
+# Latest upload (must come before the dynamic {upload_id} route)
+# ---------------- Latest upload (all records) ----------------
+@router.get("/{data_type}/latest-data-file/", response_model=list)
+def get_latest_upload_data_file(data_type: str, db: Session = Depends(get_db)):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+
+    UploadModel = UPLOAD_TABLES[data_type]
+
+    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
     if not latest_upload:
-        raise HTTPException(status_code=404, detail="No heatmap data found")
+        raise HTTPException(status_code=404, detail="No uploads found")
 
-    heatmap_rows = db.query(HeatMapModel).filter(HeatMapModel.upload_id == latest_upload.id).all()
+    file_path = latest_upload.file_path
+
+    # Choose columns based on type
+    expected_columns = COLUMN_MAP.get(data_type)
+
+    # ---------- Safe CSV reading ----------
+    try:
+        try:
+            df = pd.read_csv(file_path, header=None, encoding="utf-8")
+        except UnicodeDecodeError:
+            df = pd.read_csv(file_path, header=None, encoding="latin1")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
+
+    df = df.where(pd.notnull(df), None)
+
+    # ---------- Fix column length ----------
+    if expected_columns:
+        if len(df.columns) > len(expected_columns):
+            extra = len(df.columns) - len(expected_columns)
+            expected_columns_extended = expected_columns + [f"extra_{i}" for i in range(extra)]
+            df.columns = expected_columns_extended
+        elif len(df.columns) < len(expected_columns):
+            missing = len(expected_columns) - len(df.columns)
+            df.columns = df.columns.tolist() + [f"col_{i}" for i in range(missing)]
+        else:
+            df.columns = expected_columns
+
+    return df.to_dict(orient="records")
+
+
+# ---------------- Latest upload by ISIN ----------------
+@router.get("/{data_type}/latest-data-file/{isin}", response_model=list)
+def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session = Depends(get_db)):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+
+    UploadModel = UPLOAD_TABLES[data_type]
+
+    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
+    if not latest_upload:
+        raise HTTPException(status_code=404, detail="No uploads found")
+
+    file_path = latest_upload.file_path
+    expected_columns = COLUMN_MAP.get(data_type)
+
+    # ---------- Safe CSV reading ----------
+    try:
+        try:
+            df = pd.read_csv(file_path, header=None, encoding="utf-8")
+        except UnicodeDecodeError:
+            df = pd.read_csv(file_path, header=None, encoding="latin1")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
+
+    df = df.where(pd.notnull(df), None)
+
+    # ---------- Fix column length ----------
+    if expected_columns:
+        if len(df.columns) > len(expected_columns):
+            extra = len(df.columns) - len(expected_columns)
+            expected_columns_extended = expected_columns + [f"extra_{i}" for i in range(extra)]
+            df.columns = expected_columns_extended
+        elif len(df.columns) < len(expected_columns):
+            missing = len(expected_columns) - len(df.columns)
+            df.columns = df.columns.tolist() + [f"col_{i}" for i in range(missing)]
+        else:
+            df.columns = expected_columns
+
+    # ---------- Filter by ISIN ----------
+    isin_col = "ISIN" if "ISIN" in df.columns else df.columns[0]
+    df[isin_col] = df[isin_col].astype(str).str.strip()
+    isin = isin.strip()
+    filtered_df = df[df[isin_col] == isin]
+
+
+    if filtered_df.empty:
+        raise HTTPException(status_code=404, detail=f"No records found for ISIN {isin}")
+
+    return filtered_df.to_dict(orient="records")
+
+
+# ---------------- Get single upload ----------------
+@router.get("/{data_type}/{upload_id}/", response_model=UploadBase)
+def get_upload(data_type: str, upload_id: int, db: Session = Depends(get_db)):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
     
-    # Convert to dict and clean NaN for safe JSON serialization
-    heatmap_data = [replace_nan_recursive(heatmap_to_dict(row)) for row in heatmap_rows]
+    UploadModel = UPLOAD_TABLES[data_type]
+    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    
+    return upload  # no __dict__, Pydantic handles it
 
-    return heatmap_data
 
+# ---------------- Update upload metadata ----------------
+@router.put("/{data_type}/{upload_id}/", response_model=dict)
+async def update_upload(
+    data_type: str,
+    upload_id: int,
+    upload_date: str = Form(None),
+    data_date: str = Form(None),
+    new_data_type: str = Form(None),  # allows changing type
+    file: UploadFile = File(None),    # allows updating the file
+    db: Session = Depends(get_db),
+):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid original data_type")
 
-# ----------------- DELETE UPLOAD -----------------
-@router.delete("/{upload_id}", response_model=dict)
-def delete_upload(upload_id: int, db: Session = Depends(get_db)):
+    UploadModel = UPLOAD_TABLES[data_type]
     upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    if os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    # ---------- Update dates ----------
+    if upload_date:
+        upload.upload_date = datetime.strptime(upload_date, "%Y-%m-%d").date()
+    if data_date:
+        upload.data_date = datetime.strptime(data_date, "%Y-%m-%d").date()
 
+    # ---------- Update data_type ----------
+    if new_data_type:
+        new_data_type = new_data_type.lower()
+        if new_data_type not in UPLOAD_TABLES:
+            raise HTTPException(status_code=400, detail="Invalid new data_type")
+        upload.data_type = new_data_type
+
+    # ---------- Update file ----------
+    if file:
+        if not file.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail="Only CSV files allowed")
+
+        # Save new file
+        file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.csv")
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # Optionally delete old file
+        if os.path.exists(upload.file_path):
+            os.remove(upload.file_path)
+
+        upload.file_name = file.filename
+        upload.file_path = file_path
+
+    db.commit()
+    db.refresh(upload)
+    return {
+        "id": upload.id,
+        "upload_date": str(upload.upload_date),
+        "data_date": str(upload.data_date),
+        "data_type": upload.data_type,
+        "file_name": upload.file_name,
+        "file_path": upload.file_path
+    }
+
+
+# ---------------- Delete upload ----------------
+@router.delete("/{data_type}/{upload_id}/", response_model=dict)
+def delete_upload(data_type: str, upload_id: int, db: Session = Depends(get_db)):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+
+    UploadModel = UPLOAD_TABLES[data_type]
+    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    
     db.delete(upload)
     db.commit()
-    return {"detail": "Upload deleted"}
+    return {"status": "deleted", "id": upload_id}
+
+

@@ -4,12 +4,12 @@ from app.routes.marketind import router as marketind_router
 from app.routes.instocktrend import router as indstocktrend_router
 from app.routes.mostvalued import router as mostvaluedhouse_router
 from app.routes.volumetrade import router as volumetrade_router 
-from app.routes.heatmap import router as heatmap_router
 from app.routes.ipo import router as ipo_router
 from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
+from app.routes.heatmap import router as heatmap_router
 from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
