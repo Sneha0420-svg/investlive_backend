@@ -5,11 +5,14 @@ from app.database import SessionLocal
 from app.models.heatmap import (
     HouseUpload,
     CompanyUpload,
-    IndustryUpload,
+    IndustryUpload,       
     House,
     Company,
     Industry,
 )
+from fastapi.responses import FileResponse
+from fastapi import Path
+
 import pandas as pd
 import uuid
 import shutil
@@ -274,6 +277,31 @@ def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session =
         raise HTTPException(status_code=404, detail=f"No records found for ISIN {isin}")
 
     return filtered_df.to_dict(orient="records")
+
+# -------------------- DOWNLOAD FILE --------------------
+
+@router.get("/{data_type}/files/{upload_id}", response_class=FileResponse)
+def download_file(
+    data_type: str = Path(..., description="Type of data: company, house, or industry"),
+    upload_id: int = Path(..., description="ID of the uploaded file"),
+    db: Session = Depends(get_db)
+):
+    data_type = data_type.lower()
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+
+    UploadModel = UPLOAD_TABLES[data_type]
+    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
+
+    if not upload or not os.path.exists(upload.file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=upload.file_path,
+        filename=upload.file_name,
+        media_type="application/octet-stream"
+    )
+
 
 
 # ---------------- Get single upload ----------------

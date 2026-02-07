@@ -10,6 +10,7 @@ from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
 from app.routes.heatmap import router as heatmap_router
+from app.routes.corpdiary import router as corpdiary_router
 from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
@@ -47,3 +48,4 @@ app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
 app.include_router(ipo_router)
 app.include_router(ipo_heatmap_router)
+app.include_router(corpdiary_router)

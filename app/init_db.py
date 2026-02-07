@@ -9,6 +9,7 @@ from app.models.news import News
 from app.models.announcement import Announcement
 from app.models.stockpulse import StockPulseData, StockPulseUpload
 from app.models.heatmap import Company,House,Industry,CompanyUpload,HouseUpload,IndustryUpload
+from app.models.corpdiary import Bonus,BonusUpload,Split,SplitUpload,Div,DivUpload
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)
