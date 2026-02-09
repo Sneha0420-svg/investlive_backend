@@ -182,11 +182,16 @@ def get_uploads_summary(db: Session = Depends(get_db)):
 
 
 # -------------------- Download Uploaded File --------------------
-@router.get("/files/{upload_id}")
-def download_file(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(VolumeTradeUpload).filter(VolumeTradeUpload.id == upload_id).first()
+@router.get("/files/{tab}/{group_id}")
+def download_file(tab: str, group_id: str, db: Session = Depends(get_db)):
+    upload = db.query(VolumeTradeUpload).filter(
+        VolumeTradeUpload.group_id == group_id,
+        VolumeTradeUpload.data_type == tab
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
+
     if not upload.file_path or not os.path.exists(upload.file_path):
         raise HTTPException(404, "File not found on server")
 
@@ -195,7 +200,6 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
         filename=upload.file_name,
         media_type="application/octet-stream"
     )
-
 
 # -------------------- Update Upload --------------------
 @router.put("/upload-group/{group_id}")

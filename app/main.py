@@ -11,6 +11,7 @@ from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
 from app.routes.heatmap import router as heatmap_router
 from app.routes.corpdiary import router as corpdiary_router
+from app.routes.newhighlow import router as newhighlow_router
 from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
@@ -44,6 +45,7 @@ app.include_router(marketind_router)
 app.include_router(stockpulse_router)
 app.include_router(indstocktrend_router)
 app.include_router(mostvaluedhouse_router)
+app.include_router(newhighlow_router)
 app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
 app.include_router(ipo_router)
