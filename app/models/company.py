@@ -26,7 +26,7 @@ class Company(Base):
     CMP = Column(Numeric(20, 2), nullable=False)
     PCL = Column(Numeric(20, 2), nullable=False)
     CH_RS = Column(Numeric(20, 2), nullable=False)
-    CH_PER = Column(Numeric(20, 2), nullable=False)
+    CH_PER = Column(Numeric(20, 1), nullable=False)
     OPEN = Column(Numeric(20, 2), nullable=False)
     HIGH = Column(Numeric(20, 2), nullable=False)
     LOW = Column(Numeric(20, 2), nullable=False)

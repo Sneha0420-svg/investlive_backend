@@ -198,6 +198,7 @@ def get_new_high_low_uploads(
         for u in uploads
     ]
     
+    
 @router.get("/latest/{category}")
 def get_latest_data_new_high_low(category: str, db: Session = Depends(get_db)):
     if category not in ["52-week", "multi-year","circuit"]:

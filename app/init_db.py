@@ -11,6 +11,14 @@ from app.models.stockpulse import StockPulseData, StockPulseUpload
 from app.models.heatmap import Company,House,Industry,CompanyUpload,HouseUpload,IndustryUpload
 from app.models.corpdiary import Bonus,BonusUpload,Split,SplitUpload,Div,DivUpload
 from app.models.newhighlow import FiftyTwoWeekHighLow, MultiYearHighLow
+from app.models.mcapgainerloser import (
+    McapGainersLosers,
+    McapGainersLosersUpload,
+   Upward_DownwardMobile,
+   Upward_DownwardMobileUpload,
+   Up_DownTrend,
+    Up_DownTrendUpload
+)
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)
