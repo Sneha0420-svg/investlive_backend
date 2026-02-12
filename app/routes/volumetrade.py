@@ -46,6 +46,23 @@ def clean_objs(objs):
                 setattr(obj, attr, None)
     return objs
 
+COLUMN_MAPPING = {
+    "volume": [
+        "company","isin","mcap","cmp","volume","spurt","chper",
+        "five_dvma","twentyone_dvma","sixty_dvma",
+        "two_four_five_dvma","five_two_wkhv","five_two_wklv"
+    ],
+    "value": [
+        "company","isin","mcap","cmp","value","spurt","chper",
+        "five_dvma","twentyone_dvma","sixty_dvma",
+        "two_four_five_dvma","five_two_wkhv","five_two_wklv"
+    ],
+    "trade": [
+        "company","isin","mcap","cmp","trade","spurt","chper",
+        "five_dvma","twentyone_dvma","sixty_dvma",
+        "two_four_five_dvma","five_two_wkhv","five_two_wklv"
+    ]
+}
 
 # -------------------- Upload Endpoint for Multiple Tabs --------------------
 @router.post("/upload")
@@ -65,11 +82,9 @@ async def upload_three_tabs(
     all_records = []
 
     for file, data_type in zip(files, data_types):
-
-        if data_type not in TAB_MODEL_MAPPING:
-            raise HTTPException(400, f"Invalid data_type: {data_type}")
-
         Model = TAB_MODEL_MAPPING[data_type]
+
+
 
         filename = f"{date.today()}_{uuid4()}_{file.filename}"
         file_path = os.path.join(UPLOAD_FOLDER, filename)
@@ -97,11 +112,7 @@ async def upload_three_tabs(
         if df.shape[1] != 13:
             raise HTTPException(400, f"{data_type} file must have 13 columns")
 
-        df.columns = [
-            "company","isin","mcap","cmp","volume","spurt","chper",
-            "five_dvma","twentyone_dvma","sixty_dvma",
-            "two_four_five_dvma","five_two_wkhv","five_two_wklv"
-        ]
+        df.columns = COLUMN_MAPPING[data_type]
 
         df = df.where(pd.notnull(df), None)
 

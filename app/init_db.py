@@ -19,6 +19,10 @@ from app.models.mcapgainerloser import (
    Up_DownTrend,
     Up_DownTrendUpload
 )
+from app.models.indstocksnapshot_graph import (
+    IndStockGraph,
+    IndStockGraphUpload
+)
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)
