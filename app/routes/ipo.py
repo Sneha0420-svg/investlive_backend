@@ -88,9 +88,9 @@ async def upload_multiple_data(
                 df = pd.read_excel(file_path)
             elif filename.endswith(".csv"):
                 try:
-                    df = pd.read_csv(file_path, encoding="utf-8")
+                    df = pd.read_csv(file_path, encoding="utf-8", on_bad_lines='skip')
                 except UnicodeDecodeError:
-                    df = pd.read_csv(file_path, encoding="latin1")
+                    df = pd.read_csv(file_path, encoding="latin1", on_bad_lines='skip')
             else:
                 raise HTTPException(400, "Invalid file type")
         except Exception as e:
