@@ -87,11 +87,15 @@ async def upload_multiple_data(
             if filename.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(file_path)
             elif filename.endswith(".csv"):
-                df = pd.read_csv(file_path)
+                try:
+                    df = pd.read_csv(file_path, encoding="utf-8")
+                except UnicodeDecodeError:
+                    df = pd.read_csv(file_path, encoding="latin1")
             else:
                 raise HTTPException(400, "Invalid file type")
         except Exception as e:
             raise HTTPException(400, f"Failed to read file: {e}")
+
 
         # Validate structure
         if df.shape[1] != 47:
