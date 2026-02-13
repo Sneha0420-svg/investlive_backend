@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from datetime import date
 from sqlalchemy import func
 import pandas as pd
-from datetime import datetime
+from datetime import datetime,date
 from typing import List
 import math
 import io
@@ -28,7 +28,7 @@ def get_db():
         db.close()
 
 # -------------------- Safe Date Parser --------------------
-def parse_date_safe(date_str: str) -> datetime.date | None:
+def parse_date_safe(date_str: str) -> date | None:
     if not date_str or pd.isna(date_str):
         return None
     for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
