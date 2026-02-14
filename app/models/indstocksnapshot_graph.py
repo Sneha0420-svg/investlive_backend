@@ -4,7 +4,7 @@ from app.database import Base
 class IndStockGraph(Base):
     __tablename__ = 'indstock_graph'
 
-    ID = Column(Integer, primary_key=True, nullable=False)
+    ID = Column(Integer, primary_key=True, nullable=False,autoincrement=True)
     TRN_DATE = Column(Date, nullable=False)
     STKS_TRD = Column(Integer, nullable=False)
     ADV = Column(Integer, nullable=False)

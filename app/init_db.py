@@ -23,6 +23,19 @@ from app.models.indstocksnapshot_graph import (
     IndStockGraph,
     IndStockGraphUpload
 )
+from app.models.managerrank import (
+    LMRank,
+    LMRankUpload,
+    LMSub,
+    LMSubUpload
+)
+from app.models.mostvaluedcharts import (
+    MostValCompanyChart,
+    MostValCompanyChartUpload,
+    MostValHouseChart,
+    MostValHouseChartUpload
+)
+
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)
