@@ -126,6 +126,45 @@ class Industry(Base):
     YRCH = Column(Numeric(20, 1))
     SECID = Column(String(45), nullable=False)
     ISCCODE = Column(String(45), nullable=False)
+# =========================
+# SECTOR
+# =========================
+class Sector(Base):
+    __tablename__ = "sector"
+    pk_id = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    ID = Column(Integer, primary_key=True)
+    RNK = Column(Integer, nullable=False)
+
+    SECTOR = Column(String(45))
+    COS = Column(Integer)
+
+    MCAP = Column(Numeric(20, 2))
+    DAYCHCR = Column(Numeric(20, 2))
+    CH = Column(Numeric(20, 1))
+
+    FFLOAT = Column(Numeric(20, 2), nullable=False)
+    FFRNK = Column(Integer, nullable=False)
+
+    WKCHCR = Column(Numeric(20, 2))
+    WKCH = Column(Numeric(20, 1))
+
+    MTHCHCR = Column(Numeric(20, 2))
+    MTHCH = Column(Numeric(20, 1))
+
+    QTRCHCR = Column(Numeric(20, 2))
+    QTRCH = Column(Numeric(20, 1))
+
+    HYCHCR = Column(Numeric(20, 2))
+    HYCH = Column(Numeric(20, 1))
+
+    YRCHCR = Column(Numeric(20, 2))
+    YRCH = Column(Numeric(20, 1))
+
+    SECID = Column(String(45), nullable=False)
+
+    
+
 class CompanyUpload(Base):
     __tablename__ = "company_upload"
 
@@ -156,3 +195,14 @@ class IndustryUpload(Base):
     data_type = Column(String(100), nullable=False)  # "tab1", "tab2", "tab3"
     file_name = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)  # stored path or URL
+
+class SectorUpload(Base):
+    __tablename__ = "sector_upload"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(String(36), index=True, nullable=False)
+    upload_date = Column(Date, nullable=False)
+    data_date = Column(Date, nullable=False)
+    data_type = Column(String(100), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)

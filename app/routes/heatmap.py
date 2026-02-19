@@ -5,10 +5,12 @@ from app.database import SessionLocal
 from app.models.heatmap import (
     HouseUpload,
     CompanyUpload,
-    IndustryUpload,       
+    IndustryUpload, 
+    SectorUpload,      
     House,
     Company,
     Industry,
+    Sector
 )
 from fastapi.responses import FileResponse
 from fastapi import Path
@@ -32,11 +34,13 @@ TABLE_MAP = {
     "company": (Company, CompanyUpload),
     "house": (House, HouseUpload),
     "industry": (Industry, IndustryUpload),
+    "sector": (Sector, SectorUpload),
 }
 UPLOAD_TABLES = {
     "company": CompanyUpload,
     "house": HouseUpload,
     "industry": IndustryUpload,
+    "sector": SectorUpload,
 }
 
 # ---------------- CSV column order (NO HEADERS) ----------------
@@ -67,10 +71,19 @@ INDUSTRY_COLUMNS = [
     "SECID", "ISCCODE",
 ]
 
+SECTOR_COLUMNS = [
+    "ID", "RNK", "SECTOR", "COS", "MCAP", "DAYCHCR", "CH",
+    "FFLOAT", "FFRNK", "WKCHCR", "WKCH",
+    "MTHCHCR", "MTHCH", "QTRCHCR", "QTRCH",
+    "HYCHCR", "HYCH", "YRCHCR", "YRCH",
+    "SECID",
+]
+
 COLUMN_MAP = {
     "company": COMPANY_COLUMNS,
     "house": HOUSE_COLUMNS,
     "industry": INDUSTRY_COLUMNS,
+    "sector": SECTOR_COLUMNS,
 }
 
 # ---------------- DB Dependency ----------------
@@ -96,7 +109,7 @@ async def upload_file(
     if data_type not in TABLE_MAP:
         raise HTTPException(
             status_code=400,
-            detail="Invalid data_type. Use company, house, or industry.",
+            detail="Invalid data_type. Use company, house, industry, or sector.",
         )
 
     if not file.filename.lower().endswith(".csv"):
@@ -282,7 +295,7 @@ def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session =
 
 @router.get("/{data_type}/files/{upload_id}", response_class=FileResponse)
 def download_file(
-    data_type: str = Path(..., description="Type of data: company, house, or industry"),
+    data_type: str = Path(..., description="Type of data: company, house, industry, or sector"),
     upload_id: int = Path(..., description="ID of the uploaded file"),
     db: Session = Depends(get_db)
 ):
