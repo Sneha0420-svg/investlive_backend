@@ -1,14 +1,13 @@
 from sqlalchemy import Column, Integer, String, Date, DECIMAL
 from app.database import Base
 
-
 # ============================================================
 # Most Valued Company Chart (Data Table)
 # ============================================================
 class MostValCompanyChart(Base):
     __tablename__ = "most_val_company_chart"
 
-    ID = Column(Integer, primary_key=True, index=True)
+    ID = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     COMPANY = Column(String(20), nullable=False)
     ISIN = Column(String(20), nullable=False)
     VAL = Column(Integer, nullable=False)
@@ -22,7 +21,7 @@ class MostValCompanyChart(Base):
 class MostValCompanyChartUpload(Base):
     __tablename__ = "most_val_company_chart_upload"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     group_id = Column(String(50), nullable=False, unique=True, index=True)
     upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
@@ -37,7 +36,7 @@ class MostValCompanyChartUpload(Base):
 class MostValHouseChart(Base):
     __tablename__ = "most_val_house_chart"
 
-    ID = Column(Integer, primary_key=True, index=True)
+    ID = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     H_ID = Column(DECIMAL(20, 6), nullable=False)
     HOUSE_NAME = Column(String(45), nullable=False)
     VALUE = Column(Integer, nullable=False)
@@ -51,7 +50,7 @@ class MostValHouseChart(Base):
 class MostValHouseChartUpload(Base):
     __tablename__ = "most_val_house_chart_upload"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     group_id = Column(String(50), nullable=False, unique=True, index=True)
     upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)

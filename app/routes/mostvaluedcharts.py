@@ -23,7 +23,6 @@ os.makedirs(UPLOAD_BASE, exist_ok=True)
 # ============================================================
 # DB Session
 # ============================================================
-
 def get_db():
     db = SessionLocal()
     try:
@@ -35,47 +34,47 @@ def get_db():
 # ============================================================
 # Helper: Get Models by Category
 # ============================================================
-
 def get_models(category: str):
     if category == "company":
         return (
             MostValCompanyChart,
             MostValCompanyChartUpload,
-            ["ID", "COMPANY", "ISIN", "VAL", "TRN_DATE"]
+            ["COMPANY", "ISIN", "VAL", "TRN_DATE"]  # first column ignored
         )
     elif category == "house":
         return (
             MostValHouseChart,
             MostValHouseChartUpload,
-            ["ID", "H_ID", "HOUSE_NAME", "VALUE", "TRN_DATE"]
+            ["H_ID", "HOUSE_NAME", "VALUE", "TRN_DATE"]  # first column ignored
         )
     else:
         raise HTTPException(400, "Invalid category. Use 'company' or 'house'.")
 
 
 # ============================================================
-# Helper: Read File (NO HEADERS SUPPORT)
+# Helper: Read File (ignore first column)
 # ============================================================
-
 def read_file_without_headers(file_path: str, required_columns: list, category: str):
+    # Read CSV or Excel
     if file_path.endswith(".csv"):
         df = pd.read_csv(file_path, header=None)
     else:
         df = pd.read_excel(file_path, header=None)
 
-    # Remove fully empty columns (safety)
+    # Remove fully empty columns
     df = df.dropna(axis=1, how="all")
 
-    if df.shape[1] < 5:
+    # Ignore the first column
+    df = df.iloc[:, 1:1 + len(required_columns)]
+
+    # Check column count
+    if df.shape[1] < len(required_columns):
         raise HTTPException(
             status_code=400,
-            detail=f"{category} file must contain exactly 5 columns"
+            detail=f"{category} file must contain at least {len(required_columns)+1} columns (first ignored)"
         )
 
-    # Keep only first 5 columns
-    df = df.iloc[:, :5]
-
-    # Assign column names manually
+    # Assign proper column names
     df.columns = required_columns
 
     # Convert date column
@@ -87,7 +86,6 @@ def read_file_without_headers(file_path: str, required_columns: list, category: 
 # ============================================================
 # Upload
 # ============================================================
-
 @router.post("/{category}/upload")
 async def upload_file(
     category: str,
@@ -97,26 +95,22 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, required_columns = get_models(category)
-
     group_id = str(uuid4())
 
+    # Save file
     category_folder = os.path.join(UPLOAD_BASE, category)
     os.makedirs(category_folder, exist_ok=True)
-
     filename = f"{date.today()}_{uuid4()}_{file.filename}"
     file_path = os.path.join(category_folder, filename)
-
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # Read file properly (headerless supported)
+    # Read file ignoring first column
     df = read_file_without_headers(file_path, required_columns, category)
 
     # Insert records
     records = [
-        DataModel(**{
-            col: row[col] for col in required_columns
-        }, group_id=group_id)
+        DataModel(**{col: row[col] for col in required_columns}, group_id=group_id)
         for _, row in df.iterrows()
     ]
 
@@ -142,26 +136,21 @@ async def upload_file(
 # ============================================================
 # Get Uploads
 # ============================================================
-
 @router.get("/{category}/uploads")
 def get_uploads(category: str, db: Session = Depends(get_db)):
     _, UploadModel, _ = get_models(category)
-
     uploads = db.query(UploadModel).order_by(
         UploadModel.upload_date.desc()
     ).all()
-
     return uploads
 
 
 # ============================================================
 # Get Latest Data
 # ============================================================
-
 @router.get("/{category}/latest")
 def get_latest(category: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _ = get_models(category)
-
     latest_upload = db.query(UploadModel).order_by(
         UploadModel.data_date.desc()
     ).first()
@@ -182,11 +171,9 @@ def get_latest(category: str, db: Session = Depends(get_db)):
 # ============================================================
 # Download
 # ============================================================
-
 @router.get("/{category}/download/{group_id}")
 def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
     _, UploadModel, _ = get_models(category)
-
     upload = db.query(UploadModel).filter(
         UploadModel.group_id == group_id
     ).first()
@@ -200,7 +187,6 @@ def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
 # ============================================================
 # Update Upload
 # ============================================================
-
 @router.put("/{category}/upload/{group_id}")
 async def update_upload(
     category: str,
@@ -211,7 +197,6 @@ async def update_upload(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, required_columns = get_models(category)
-
     upload = db.query(UploadModel).filter(
         UploadModel.group_id == group_id
     ).first()
@@ -219,26 +204,19 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Update dates if provided
     if upload_date:
         upload.upload_date = upload_date
-
     if data_date:
         upload.data_date = data_date
 
-    # Replace file if provided
     if file:
-
-        # Delete old file
         if upload.file_path and os.path.exists(upload.file_path):
             os.remove(upload.file_path)
 
         category_folder = os.path.join(UPLOAD_BASE, category)
         os.makedirs(category_folder, exist_ok=True)
-
         filename = f"{date.today()}_{uuid4()}_{file.filename}"
         file_path = os.path.join(category_folder, filename)
-
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
@@ -246,24 +224,17 @@ async def update_upload(
         upload.file_path = file_path
 
         # Delete old records
-        db.query(DataModel).filter(
-            DataModel.group_id == group_id
-        ).delete(synchronize_session=False)
+        db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
 
-        # Read new file
+        # Read new file ignoring first column
         df = read_file_without_headers(file_path, required_columns, category)
-
         new_records = [
-            DataModel(**{
-                col: row[col] for col in required_columns
-            }, group_id=group_id)
+            DataModel(**{col: row[col] for col in required_columns}, group_id=group_id)
             for _, row in df.iterrows()
         ]
-
         db.bulk_save_objects(new_records)
 
     db.commit()
-
     return {
         "message": f"{category} upload updated successfully",
         "group_id": group_id
@@ -273,11 +244,9 @@ async def update_upload(
 # ============================================================
 # Delete
 # ============================================================
-
 @router.delete("/{category}/upload/{group_id}")
 def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _ = get_models(category)
-
     upload = db.query(UploadModel).filter(
         UploadModel.group_id == group_id
     ).first()
@@ -286,14 +255,10 @@ def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Upload not found")
 
     # Delete records
-    db.query(DataModel).filter(
-        DataModel.group_id == group_id
-    ).delete()
-
+    db.query(DataModel).filter(DataModel.group_id == group_id).delete()
     # Delete file
     if upload.file_path and os.path.exists(upload.file_path):
         os.remove(upload.file_path)
-
     db.delete(upload)
     db.commit()
 

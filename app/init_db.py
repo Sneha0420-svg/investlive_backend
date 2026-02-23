@@ -1,5 +1,6 @@
 from app.database import Base, engine
 from app.models.marketind import StockData,MarketIndicatorUpload   # import your model modules here
+from app.models.auth import User
 from app.models.instocktrend import InstockTrendData,Indstocktrendupload
 from app.models.mostvalued import Mostvalued,MostValuedupload
 from app.models.ipo import DataUpload,IPOUpload
