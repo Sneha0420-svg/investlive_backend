@@ -55,11 +55,11 @@ def login(email: str = Body(...), password: str = Body(...), db: Session = Depen
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token({"sub": str(user.id)})
+    token = create_access_token({"sub": str(user.userid)})
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {"id": user.id, "name": user.name, "email": user.email}
+        "user": {"userid": user.userid, "name": user.name, "email": user.email}
     }
 
 # -----------------------
@@ -80,9 +80,25 @@ def google_login(email: str = Body(...), name: str = Body(...), db: Session = De
         db.commit()
         db.refresh(user)
 
-    token = create_access_token({"sub": str(user.id)})
+    token = create_access_token({"sub": str(user.userid)})
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {"id": user.id, "name": user.name, "email": user.email}
+        "user": {"userid": user.userid, "name": user.name, "email": user.email}
+    }
+    
+# -----------------------
+# Get User by userid
+# -----------------------
+@router.get("/user/{userid}")
+def get_user(userid: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.userid == userid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {
+        "userid": user.userid,
+        "name": user.name,
+        "email": user.email,
+        "profession": user.profession
     }
