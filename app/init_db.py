@@ -37,6 +37,9 @@ from app.models.mostvaluedcharts import (
     MostValHouseChartUpload
 )
 
+from app.models.pricemoving import PriceMoving
+from app.models.volumemoving import VolumeMoving
+
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)

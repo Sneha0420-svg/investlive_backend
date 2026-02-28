@@ -17,6 +17,8 @@ from app.routes.mcapgainerloser import router as mcapgainerloser_router
 from app.routes.indstocksnapshot_graph import router as indstockgraph_router
 from app.routes.managerrank import router as managerrank_router
 from app.routes.mostvaluedcharts import router as mostvaluedcharts_router
+from app.routes.pricemoving import router as pricemoving_router
+from app.routes.volumemoving import router as volumemoving_router
 from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
@@ -61,3 +63,5 @@ app.include_router(ipo_router)
 app.include_router(ipo_heatmap_router)
 app.include_router(managerrank_router)
 app.include_router(corpdiary_router)
+app.include_router(pricemoving_router)
+app.include_router(volumemoving_router)
