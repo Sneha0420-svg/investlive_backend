@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from datetime import date, timedelta, datetime
 import csv
-
+from sqlalchemy import func
 from app.models.volumemoving import VolumeMoving
 from app.database import SessionLocal
 
@@ -203,3 +203,25 @@ def delete_by_trn_date(
     return {
         "message": f"Deleted {deleted_count} records for TRN_DATE {trn_date}"
     }
+    # ----------------------
+# Get all upload dates with total records
+# ----------------------
+@router.get("/uploads")
+def get_all_uploads(db: Session = Depends(get_db)):
+    """
+    Return all upload dates (TRN_DATE) with total records for each date
+    """
+    uploads = (
+        db.query(
+            VolumeMoving.TRN_DATE,
+            func.count(VolumeMoving.ID).label("TOTAL_RECORDS")
+        )
+        .group_by(VolumeMoving.TRN_DATE)
+        .order_by(VolumeMoving.TRN_DATE.desc())
+        .all()
+    )
+
+    return [
+        {"TRN_DATE": u.TRN_DATE.isoformat(), "TOTAL_RECORDS": u.TOTAL_RECORDS}
+        for u in uploads
+    ]

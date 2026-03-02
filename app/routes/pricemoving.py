@@ -189,3 +189,36 @@ def delete_by_trn_date(trn_date: str = Query(..., description="Date of the uploa
     return {
         "message": f"Deleted {deleted_count} records for TRN_DATE {trn_date}"
     }
+    
+# ----------------------
+# Get All Upload Dates (Grouped by TRN_DATE)
+# ----------------------
+from sqlalchemy import func
+
+@router.get("/uploads")
+def get_all_uploads(db: Session = Depends(get_db)):
+    """
+    Returns all unique TRN_DATE values (each upload batch)
+    with record count for that date.
+    """
+
+    uploads = (
+        db.query(
+            PriceMoving.TRN_DATE,
+            func.count(PriceMoving.ID).label("total_records")
+        )
+        .group_by(PriceMoving.TRN_DATE)
+        .order_by(PriceMoving.TRN_DATE.desc())
+        .all()
+    )
+
+    if not uploads:
+        raise HTTPException(status_code=404, detail="No uploads found")
+
+    return [
+        {
+            "TRN_DATE": u.TRN_DATE.isoformat(),
+            "TOTAL_RECORDS": u.total_records
+        }
+        for u in uploads
+    ]

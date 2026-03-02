@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.marketind import router as marketind_router
+from app.routes.marketindgraph import router as marketindgraph_router
 from app.routes.instocktrend import router as indstocktrend_router
 from app.routes.mostvalued import router as mostvaluedhouse_router
 from app.routes.volumetrade import router as volumetrade_router 
@@ -50,6 +51,7 @@ app.include_router(auth_router)
 app.include_router(news_router)
 app.include_router(announcement_router)
 app.include_router(marketind_router)
+app.include_router(marketindgraph_router)
 app.include_router(stockpulse_router)
 app.include_router(indstocktrend_router)
 app.include_router(indstockgraph_router)
