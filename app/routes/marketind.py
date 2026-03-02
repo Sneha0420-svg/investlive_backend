@@ -81,9 +81,9 @@ async def upload_multiple_data(
             contents = f.read()
         try:
             if filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(contents), header=0)
+                df = pd.read_excel(io.BytesIO(contents), header=None)
             elif filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=0)
+                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid file type: {filename}")
         except Exception as e:
@@ -94,8 +94,7 @@ async def upload_multiple_data(
             raise HTTPException(status_code=400, detail=f"{filename} must have at least 9 columns")
 
         # Rename columns
-        df.columns = ["name", "yr_ago", "curnt", "ch", "H_ID", "S_ID", "IDX_ID", "flag", "ID"] + \
-                     [f"extra_{i}" for i in range(df.shape[1]-9)]
+        df.columns = ["name", "yr_ago", "curnt", "ch", "H_ID", "S_ID", "IDX_ID", "flag", "ID"]
 
         inserted_records = []
         BATCH_SIZE = 20
@@ -173,40 +172,82 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
 
 
 # --------------------- Get All Stocks by Latest Mkt Date ---------------------
-@router.get("/marketindicator/latest/", response_model=LatestStocksResponse)
-def get_latest_stocks(db: Session = Depends(get_db)):
-    # Step 1: Get the latest mkt_date from StockData (not just uploads)
+def is_header_row(stock: StockData) -> bool:
+    """Detect if a stock row is a header: all numeric columns are None or 0."""
+    numeric_fields = [stock.yr_ago, stock.curnt, stock.ch,stock.S_ID,stock.IDX_ID]
+    return all(f is None or f == 0 for f in numeric_fields)
+
+@router.get("/marketindicator/latest/", response_model=Dict[str, Any])
+def get_latest_marketindicator(db: Session = Depends(get_db)):
+    """
+    Fetch latest market indicator data grouped by tab and sections.
+    """
+    # Step 1: Get latest mkt_date
     latest_date = db.query(func.max(StockData.mkt_date)).scalar()
     if not latest_date:
         raise HTTPException(status_code=404, detail="No stock data found")
 
-    # Step 2: Get all stock data for that latest mkt_date
+    # Step 2: Fetch all stock data for that date
     stocks = db.query(StockData).filter(StockData.mkt_date == latest_date)\
         .order_by(StockData.H_ID, StockData.ID).all()
 
     if not stocks:
         raise HTTPException(status_code=404, detail=f"No stock data found for latest mkt_date: {latest_date}")
 
-    # Step 3: Prepare response
-    result = [
-        {
-            "id": stock.ID,
-            "name": stock.name,
-            "yr_ago": stock.yr_ago,
-            "curnt": stock.curnt,
-            "ch": stock.ch,
-            "H_ID": stock.H_ID,
-            "S_ID": stock.S_ID,
-            "IDX_ID": stock.IDX_ID,
-            "flag": stock.flag,
-            "mkt_date": stock.mkt_date
-        } for stock in stocks
-    ]
+    # Step 3: Tab mapping
+    tab_map = {
+        1: "Returns",
+        2: "Indices",
+        3: "Currencies",
+        4: "World P/E Ratio",
+        5: "Commodities"
+    }
 
+    # Step 4: Section headers for each tab
+    tab_sections = {
+        1: ["India Stocks", "Bullion", "Forex vs INR", "Crude"],
+        2: ["BRICS", "Asia/Pacific", "America/Europe"],
+        3: ["INR vs.", "USD vs."],
+        5: ["Metals (Kg)", "Agro-Indu (100 Kg)"]
+    }
+
+    # Step 5: Prepare result structure
+    result = {tab_name: [] for tab_name in tab_map.values()}
+    current_section_per_tab = {}
+
+    for stock in stocks:
+        tab_name = tab_map.get(stock.H_ID, "Unknown")
+        stock_name = (stock.name or "").strip()
+        sections_for_tab = tab_sections.get(stock.H_ID, [])
+
+        # Determine if the row is a section header
+        is_header = stock_name in sections_for_tab or is_header_row(stock)
+
+        if is_header:
+            section_title = stock_name if stock_name in sections_for_tab else "yr-ago"
+            section = {"title": section_title, "rows": []}
+            result[tab_name].append(section)
+            current_section_per_tab[tab_name] = section
+        else:
+            current_section = current_section_per_tab.get(tab_name)
+            if not current_section:
+                current_section = {"title": "(No Title)", "rows": []}
+                result[tab_name].append(current_section)
+                current_section_per_tab[tab_name] = current_section
+
+            # Append the stock data row
+            current_section["rows"].append([
+                stock.name,
+                stock.yr_ago,
+                stock.curnt,
+                stock.ch
+            ])
+
+    # Step 6: Return structured response
     return {
         "latest_mkt_date": latest_date,
         "total_records": len(stocks),
-        "stocks": result
+        "stocks_by_tab": result
     }
 # --------------------- Get Stocks by IDX_ID ---------------------
 @router.get("/marketindicator/idx/{idx_id}", response_model=List[dict])
