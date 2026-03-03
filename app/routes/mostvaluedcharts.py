@@ -132,18 +132,31 @@ async def upload_file(
         "group_id": group_id
     }
 
-
 # ============================================================
-# Get Uploads
+# Get all uploads across all categories
 # ============================================================
-@router.get("/{category}/uploads")
-def get_uploads(category: str, db: Session = Depends(get_db)):
-    _, UploadModel, _ = get_models(category)
-    uploads = db.query(UploadModel).order_by(
-        UploadModel.upload_date.desc()
-    ).all()
-    return uploads
+@router.get("/uploads/all")
+def get_all_uploads(db: Session = Depends(get_db)):
+    all_uploads = []
 
+    # List of categories
+    categories = ["company", "house"]
+
+    for category in categories:
+        _, UploadModel, _ = get_models(category)
+        uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+        
+        # Add category info to each upload
+        for u in uploads:
+            all_uploads.append({
+                "group_id": u.group_id,
+                "file_name": u.file_name,
+                "upload_date": u.upload_date,
+                "data_date": u.data_date,
+                "category": category
+            })
+
+    return all_uploads
 
 # ============================================================
 # Get Latest Data

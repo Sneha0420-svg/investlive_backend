@@ -205,10 +205,11 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
 
     # Step 4: Section headers for each tab
     tab_sections = {
-        1: ["India Stocks", "Bullion", "Forex vs INR", "Crude"],
+        1: ["India  Stocks", "Bullion", "Forex vs INR", "Crude"],
         2: ["BRICS", "Asia/Pacific", "America/Europe"],
         3: ["INR vs.", "USD vs."],
-        5: ["Metals (Kg)", "Agro-Indu (100 Kg)"]
+        4:["Country"],
+        5: ["Metals (Kg)","Agro-Cons (100 Kg)","Agro-Indu (100 Kg)","Energy (Rs)"]
     }
 
     # Step 5: Prepare result structure
@@ -224,7 +225,7 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
         is_header = stock_name in sections_for_tab or is_header_row(stock)
 
         if is_header:
-            section_title = stock_name if stock_name in sections_for_tab else "yr-ago"
+            section_title = stock_name if stock_name in sections_for_tab else ""
             section = {"title": section_title, "rows": []}
             result[tab_name].append(section)
             current_section_per_tab[tab_name] = section
@@ -240,7 +241,10 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
                 stock.name,
                 stock.yr_ago,
                 stock.curnt,
-                stock.ch
+                stock.ch,
+                stock.H_ID,
+                stock.S_ID,
+                stock.IDX_ID
             ])
 
     # Step 6: Return structured response

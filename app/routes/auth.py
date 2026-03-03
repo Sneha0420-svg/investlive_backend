@@ -119,7 +119,23 @@ def get_user(userid: int, db: Session = Depends(get_db)):
         "profession": user.profession,
         "phone": user.phone
     }
-
+# -----------------------
+# Get All Users
+# -----------------------
+@router.get("/users")
+def get_all_users(db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    return [
+        {
+            "userid": user.userid,
+            "name": user.name,
+            "email": user.email,
+            "profession": user.profession,
+            "phone": user.phone,
+            "registered_at": user.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for user in users
+    ]
 # -----------------------
 # Forgot Password
 # -----------------------
