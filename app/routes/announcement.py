@@ -79,6 +79,7 @@ def create_announcement(
     company: str = Form(...),
     announcement: str = Form(...),
     announcements_type: str = Form("General"),
+    url: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
@@ -86,6 +87,7 @@ def create_announcement(
     announcement = Announcement(
         company=company,
         announcement=announcement,
+        url=url,
         announcements_type=announcements_type,
        announcement_date = datetime.now(timezone.utc)
     )
@@ -124,6 +126,7 @@ def update_announcement(
     company: str = Form(...),
     announcement: str = Form(...),
     announcements_type: str = Form("General"),
+    url: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
@@ -141,6 +144,7 @@ def update_announcement(
     announcement.company = company
     announcement.announcement = announcement
     announcement.announcements_type = announcements_type
+    announcement.url = url
     announcement.announcement_date = datetime.utcnow()
 
     if image:

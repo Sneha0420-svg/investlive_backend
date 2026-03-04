@@ -10,7 +10,6 @@ class News(Base):
     id = Column(Integer, primary_key=True, index=True)
     news_date = Column(DateTime, default=datetime.utcnow)
     source = Column(String(100), nullable=False)
-    heading = Column(String(150), nullable=False)
     title = Column(String(150), nullable=True)
     content = Column(Text, nullable=False)
     news_type = Column(String(50), nullable=False, default="General")

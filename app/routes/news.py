@@ -31,7 +31,6 @@ def get_db():
 @router.post("/", response_model=NewsOut)
 def create_news(
     source: str = Form(...),
-    heading: str = Form(...),
     title: str = Form(None),
     content: str = Form(...),
     news_type: str = Form(...),
@@ -48,7 +47,6 @@ def create_news(
 
     db_news = News(
         source=source,
-        heading=heading,
         title=title,
         content=content,
         news_type=news_type,
@@ -69,7 +67,6 @@ def create_news(
     return {
         "id": db_news.id,
         "source": db_news.source,
-        "heading": db_news.heading,
         "title": db_news.title,
         "content": db_news.content,
         "news_type": db_news.news_type,
@@ -90,7 +87,6 @@ def get_news(db: Session = Depends(get_db), request: Request = None):
         result.append({
             "id": n.id,
             "source": n.source,
-            "heading": n.heading,
             "title": n.title,
             "content": n.content,
             "news_type": n.news_type,
@@ -114,7 +110,6 @@ def get_single_news(news_id: int, db: Session = Depends(get_db), request: Reques
     return {
         "id": news.id,
         "source": news.source,
-        "heading": news.heading,
         "title": news.title,
         "content": news.content,
         "news_type": news.news_type,
@@ -127,7 +122,6 @@ def get_single_news(news_id: int, db: Session = Depends(get_db), request: Reques
 def update_news(
     news_id: int,
     source: str = Form(...),
-    heading: str = Form(...),
     title: str = Form(None),
     content: str = Form(...),
     news_type: str = Form(...),
@@ -148,7 +142,6 @@ def update_news(
 
     # Update other fields
     news.source = source
-    news.heading = heading
     news.title = title
     news.content = content
     news.news_type = news_type
@@ -165,7 +158,6 @@ def update_news(
     return {
         "id": news.id,
         "source": news.source,
-        "heading": news.heading,
         "title": news.title,
         "content": news.content,
         "news_type": news.news_type,

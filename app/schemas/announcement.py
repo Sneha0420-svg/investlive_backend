@@ -17,6 +17,7 @@ class AnnouncementResponse(AnnouncementBase):
     id: int
     image_path: Optional[str] = None
     file_path: Optional[str] = None
+    url: Optional[str]=None
     announcement_date: Optional[datetime] = None
 
     class Config:
