@@ -7,10 +7,9 @@ from datetime import datetime
 # Base Schema
 # -------------------------------------------------------
 
-class SnapshotBase(BaseModel):
+class PrimaryMusingsBase(BaseModel):
     company: str
     exchange: str
-    listing_date:datetime
     content: str
 
 
@@ -18,7 +17,7 @@ class SnapshotBase(BaseModel):
 # Create Schema
 # -------------------------------------------------------
 
-class SnapshotCreate(SnapshotBase):
+class PrimaryMusingsCreate(PrimaryMusingsBase):
     pass
 
 
@@ -26,7 +25,7 @@ class SnapshotCreate(SnapshotBase):
 # Response Schema
 # -------------------------------------------------------
 
-class SnapshotResponse(SnapshotBase):
+class PrimaryMusingsResponse(PrimaryMusingsBase):
     id: int
     logo_image: Optional[str] = None
     pdf_path: Optional[str] = None
@@ -35,4 +34,3 @@ class SnapshotResponse(SnapshotBase):
     model_config = {
         "from_attributes": True  # Required for SQLAlchemy ORM
     }
-    

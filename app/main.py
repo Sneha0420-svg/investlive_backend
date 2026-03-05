@@ -8,6 +8,8 @@ from app.routes.mostvalued import router as mostvaluedhouse_router
 from app.routes.volumetrade import router as volumetrade_router 
 from app.routes.ipo import router as ipo_router
 from app.routes.snapshot import router as snapshot_router
+from app.routes.curtainraiser import router as curtaonraiser_router
+from app.routes.primarymusings import router as primarymusings_router
 from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
@@ -64,6 +66,8 @@ app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
 app.include_router(ipo_router)
 app.include_router(snapshot_router)
+app.include_router(curtaonraiser_router)
+app.include_router(primarymusings_router)
 app.include_router(ipo_heatmap_router)
 app.include_router(managerrank_router)
 app.include_router(corpdiary_router)

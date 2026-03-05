@@ -15,8 +15,8 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.snapshot import Snapshot
-from app.schemas.snapshot import SnapshotResponse
+from app.models.primarymusings import PrimaryMusings
+from app.schemas.primarymusings import PrimaryMusingsResponse
 
 
 # -------------------------------------------------------------------
@@ -24,15 +24,15 @@ from app.schemas.snapshot import SnapshotResponse
 # -------------------------------------------------------------------
 
 router = APIRouter(
-    prefix="/snapshots",
-    tags=["Snapshots"]
+    prefix="/primarymusings",
+    tags=["PrimaryMusingss"]
 )
 
 # -------------------------------------------------------------------
 # Upload configuration
 # -------------------------------------------------------------------
 
-UPLOAD_DIR = Path("uploads/snapshots")
+UPLOAD_DIR = Path("uploads/PrimaryMusingss")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -69,121 +69,121 @@ def delete_file(path: Optional[str]):
 
 
 # -------------------------------------------------------------------
-# Create Snapshot
+# Create PrimaryMusings
 # -------------------------------------------------------------------
-
-@router.post("/", response_model=SnapshotResponse)
-def create_snapshot(
+@router.post("/", response_model=PrimaryMusingsResponse)
+def create_PrimaryMusings(
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    snapshot = Snapshot(
+    # Create instance of the model
+    primarymusings = PrimaryMusings(
         company=company,
         exchange=exchange,
-        listing_date=listing_date,
         content=content,
         created_at=datetime.now(timezone.utc)
     )
 
+    # Save files if provided
     if logo:
-        snapshot.logo_image = save_file(logo)
+        primarymusings.logo_image = save_file(logo)
 
     if pdf:
-        snapshot.pdf_path = save_file(pdf)
+        primarymusings.pdf_path = save_file(pdf)  # ⚠ Use the instance, not the class
 
-    db.add(snapshot)
+    # Add to DB
+    db.add(primarymusings)
     db.commit()
-    db.refresh(snapshot)
+    db.refresh(primarymusings)
 
-    return snapshot
-
+    return primarymusings
 
 # -------------------------------------------------------------------
-# Get All Snapshots
+# Get All PrimaryMusingss
 # -------------------------------------------------------------------
 
-@router.get("/", response_model=List[SnapshotResponse])
-def get_snapshots(db: Session = Depends(get_db)):
+@router.get("/", response_model=List[PrimaryMusingsResponse])
+def get_PrimaryMusingss(db: Session = Depends(get_db)):
     return (
-        db.query(Snapshot)
-        .order_by(Snapshot.created_at.desc())
+        db.query(PrimaryMusings)
+        .order_by(PrimaryMusings.created_at.desc())
         .all()
     )
 
 
 # -------------------------------------------------------------------
-# Update Snapshot
+# Update PrimaryMusings
 # -------------------------------------------------------------------
 
-@router.put("/{snapshot_id}", response_model=SnapshotResponse)
-def update_snapshot(
-    snapshot_id: int,
+@router.put("/{PrimaryMusings_id}", response_model=PrimaryMusingsResponse)
+def update_PrimaryMusings(
+    PrimaryMusings_id: int,
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    snapshot = db.query(Snapshot).filter(
-        Snapshot.id == snapshot_id
+    # Use a different variable name for the instance
+    primarymusings_instance = db.query(PrimaryMusings).filter(
+        PrimaryMusings.id == PrimaryMusings_id
     ).first()
 
-    if not snapshot:
+    if not primarymusings_instance:
         raise HTTPException(
             status_code=404,
-            detail="Snapshot not found"
+            detail="PrimaryMusings not found"
         )
 
-    snapshot.company = company
-    snapshot.exchange =exchange
-    snapshot.listing_date=listing_date
-    snapshot.content = content
-    snapshot.created_at = datetime.now(timezone.utc)
+    # Update fields
+    primarymusings_instance.company = company
+    primarymusings_instance.exchange = exchange
+    primarymusings_instance.content = content
+    primarymusings_instance.created_at = datetime.now(timezone.utc)
 
+    # Handle file uploads
     if logo:
-        delete_file(snapshot.logo_image)
-        snapshot.logo_image = save_file(logo)
+        delete_file(primarymusings_instance.logo_image)
+        primarymusings_instance.logo_image = save_file(logo)
 
     if pdf:
-        delete_file(snapshot.pdf_path)
-        snapshot.pdf_path = save_file(pdf)
+        delete_file(primarymusings_instance.pdf_path)
+        primarymusings_instance.pdf_path = save_file(pdf)
 
     db.commit()
-    db.refresh(snapshot)
+    db.refresh(primarymusings_instance)
 
-    return snapshot
-
-
+    return primarymusings_instance
 # -------------------------------------------------------------------
-# Delete Snapshot
+# Delete PrimaryMusings
 # -------------------------------------------------------------------
-
-@router.delete("/{snapshot_id}")
-def delete_snapshot(
-    snapshot_id: int,
+@router.delete("/{PrimaryMusings_id}")
+def delete_PrimaryMusings(
+    PrimaryMusings_id: int,
     db: Session = Depends(get_db),
 ):
-    snapshot = db.query(Snapshot).filter(
-        Snapshot.id == snapshot_id
+    # Use a different variable name for the instance
+    primarymusings_instance = db.query(PrimaryMusings).filter(
+        PrimaryMusings.id == PrimaryMusings_id
     ).first()
 
-    if not snapshot:
+    if not primarymusings_instance:
         raise HTTPException(
             status_code=404,
-            detail="Snapshot not found"
+            detail="PrimaryMusings not found"
         )
 
-    delete_file(snapshot.logo_image)
-    delete_file(snapshot.pdf_path)
+    # Delete associated files
+    delete_file(primarymusings_instance.logo_image)
+    delete_file(primarymusings_instance.pdf_path)
 
-    db.delete(snapshot)
+    # Delete from database
+    db.delete(primarymusings_instance)
     db.commit()
 
-    return {"message": "Snapshot deleted successfully"}
+    return {"message": "PrimaryMusings deleted successfully"}

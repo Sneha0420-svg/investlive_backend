@@ -6,6 +6,8 @@ from app.models.instocktrend import InstockTrendData,Indstocktrendupload
 from app.models.mostvalued import Mostvalued,MostValuedupload
 from app.models.ipo import DataUpload,IPOUpload
 from app.models.snapshot import Snapshot
+from app.models.curtainraiser import CurtainRaiser
+from app.models.primarymusings import PrimaryMusings
 from app.models.volumetrade import VolumeTradevolume,VolumeTradevalue,VolumeTradetrade,VolumeTradeUpload
 from app.models.ipoheatmap import IPOHeatmapYear,IPOHeatmapYearUpload,IPOHeatmapData,IPOHeatmapDataUpload
 from app.models.news import News

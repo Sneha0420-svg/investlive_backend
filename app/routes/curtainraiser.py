@@ -15,8 +15,8 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.snapshot import Snapshot
-from app.schemas.snapshot import SnapshotResponse
+from app.models.curtainraiser import CurtainRaiser
+from app.schemas.curtainraiser import CurtainRaiserResponse
 
 
 # -------------------------------------------------------------------
@@ -24,15 +24,15 @@ from app.schemas.snapshot import SnapshotResponse
 # -------------------------------------------------------------------
 
 router = APIRouter(
-    prefix="/snapshots",
-    tags=["Snapshots"]
+    prefix="/curtainraisers",
+    tags=["CurtainRaisers"]
 )
 
 # -------------------------------------------------------------------
 # Upload configuration
 # -------------------------------------------------------------------
 
-UPLOAD_DIR = Path("uploads/snapshots")
+UPLOAD_DIR = Path("uploads/CurtainRaisers")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -69,121 +69,116 @@ def delete_file(path: Optional[str]):
 
 
 # -------------------------------------------------------------------
-# Create Snapshot
+# Create CurtainRaiser
 # -------------------------------------------------------------------
-
-@router.post("/", response_model=SnapshotResponse)
-def create_snapshot(
+@router.post("/", response_model=CurtainRaiserResponse)
+def create_CurtainRaiser(
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    snapshot = Snapshot(
+    # Use a separate variable for the instance
+    curtain_raiser_instance = CurtainRaiser(
         company=company,
         exchange=exchange,
-        listing_date=listing_date,
         content=content,
         created_at=datetime.now(timezone.utc)
     )
 
+    # Save files if provided
     if logo:
-        snapshot.logo_image = save_file(logo)
+        curtain_raiser_instance.logo_image = save_file(logo)
 
     if pdf:
-        snapshot.pdf_path = save_file(pdf)
+        curtain_raiser_instance.pdf_path = save_file(pdf)
 
-    db.add(snapshot)
+    # Add to DB
+    db.add(curtain_raiser_instance)
     db.commit()
-    db.refresh(snapshot)
+    db.refresh(curtain_raiser_instance)
 
-    return snapshot
-
+    return curtain_raiser_instance
 
 # -------------------------------------------------------------------
-# Get All Snapshots
+# Get All CurtainRaisers
 # -------------------------------------------------------------------
 
-@router.get("/", response_model=List[SnapshotResponse])
-def get_snapshots(db: Session = Depends(get_db)):
+@router.get("/", response_model=List[CurtainRaiserResponse])
+def get_CurtainRaisers(db: Session = Depends(get_db)):
     return (
-        db.query(Snapshot)
-        .order_by(Snapshot.created_at.desc())
+        db.query(CurtainRaiser)
+        .order_by(CurtainRaiser.created_at.desc())
         .all()
     )
 
 
 # -------------------------------------------------------------------
-# Update Snapshot
+# Update CurtainRaiser
 # -------------------------------------------------------------------
-
-@router.put("/{snapshot_id}", response_model=SnapshotResponse)
-def update_snapshot(
-    snapshot_id: int,
+# Update CurtainRaiser
+@router.put("/{CurtainRaiser_id}", response_model=CurtainRaiserResponse)
+def update_CurtainRaiser(
+    CurtainRaiser_id: int,
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    snapshot = db.query(Snapshot).filter(
-        Snapshot.id == snapshot_id
+    # Use a different variable name for the instance
+    curtain_instance = db.query(CurtainRaiser).filter(
+        CurtainRaiser.id == CurtainRaiser_id
     ).first()
 
-    if not snapshot:
+    if not curtain_instance:
         raise HTTPException(
             status_code=404,
-            detail="Snapshot not found"
+            detail="CurtainRaiser not found"
         )
 
-    snapshot.company = company
-    snapshot.exchange =exchange
-    snapshot.listing_date=listing_date
-    snapshot.content = content
-    snapshot.created_at = datetime.now(timezone.utc)
+    curtain_instance.company = company
+    curtain_instance.exchange = exchange
+    curtain_instance.content = content
+    curtain_instance.created_at = datetime.now(timezone.utc)
 
     if logo:
-        delete_file(snapshot.logo_image)
-        snapshot.logo_image = save_file(logo)
+        delete_file(curtain_instance.logo_image)
+        curtain_instance.logo_image = save_file(logo)
 
     if pdf:
-        delete_file(snapshot.pdf_path)
-        snapshot.pdf_path = save_file(pdf)
+        delete_file(curtain_instance.pdf_path)
+        curtain_instance.pdf_path = save_file(pdf)
 
     db.commit()
-    db.refresh(snapshot)
+    db.refresh(curtain_instance)
 
-    return snapshot
+    return curtain_instance
 
 
-# -------------------------------------------------------------------
-# Delete Snapshot
-# -------------------------------------------------------------------
-
-@router.delete("/{snapshot_id}")
-def delete_snapshot(
-    snapshot_id: int,
+# Delete CurtainRaiser
+@router.delete("/{CurtainRaiser_id}")
+def delete_CurtainRaiser(
+    CurtainRaiser_id: int,
     db: Session = Depends(get_db),
 ):
-    snapshot = db.query(Snapshot).filter(
-        Snapshot.id == snapshot_id
+    curtain_instance = db.query(CurtainRaiser).filter(
+        CurtainRaiser.id == CurtainRaiser_id
     ).first()
 
-    if not snapshot:
+    if not curtain_instance:
         raise HTTPException(
             status_code=404,
-            detail="Snapshot not found"
+            detail="CurtainRaiser not found"
         )
 
-    delete_file(snapshot.logo_image)
-    delete_file(snapshot.pdf_path)
+    delete_file(curtain_instance.logo_image)
+    delete_file(curtain_instance.pdf_path)
 
-    db.delete(snapshot)
+    db.delete(curtain_instance)
     db.commit()
 
-    return {"message": "Snapshot deleted successfully"}
+    return {"message": "CurtainRaiser deleted successfully"}
