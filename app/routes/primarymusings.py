@@ -24,8 +24,8 @@ from app.schemas.primarymusings import PrimaryMusingsResponse
 # -------------------------------------------------------------------
 
 router = APIRouter(
-    prefix="/primarymusings",
-    tags=["PrimaryMusingss"]
+    prefix="/primerrymusings",
+    tags=["PrimerryMusings"]
 )
 
 # -------------------------------------------------------------------

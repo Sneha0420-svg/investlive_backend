@@ -15,6 +15,7 @@ from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
 from app.routes.heatmap import router as heatmap_router
+from app.routes.portfolio import router as stocks_movement_router
 from app.routes.corpdiary import router as corpdiary_router
 from app.routes.newhighlow import router as newhighlow_router
 from app.routes.mcapgainerloser import router as mcapgainerloser_router
@@ -64,6 +65,7 @@ app.include_router(newhighlow_router)
 app.include_router(mcapgainerloser_router)
 app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
+app.include_router(stocks_movement_router)
 app.include_router(ipo_router)
 app.include_router(snapshot_router)
 app.include_router(curtaonraiser_router)
