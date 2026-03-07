@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime,Numeric
+from sqlalchemy import Column, Integer, String, Text, DateTime,Numeric,Date
 from app.database import Base
 from datetime import datetime
 
@@ -25,6 +25,15 @@ class PortfolioStocs(Base):
     isin=Column(String,nullable=False)
     added_at=Column(DateTime, default=datetime.utcnow, nullable=False)
 
+class Stock_MovementsUploadHistory(Base):
+    __tablename__ = "stocks_movements_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+   
+    file_name = Column(String)
+    file_path = Column(String(500), nullable=False)
+    mkt_date = Column(Date, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
     
 
     

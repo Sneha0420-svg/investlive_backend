@@ -14,6 +14,7 @@ from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
+from app.routes.stocktrack import router as stocktrack_router
 from app.routes.heatmap import router as heatmap_router
 from app.routes.portfolio import router as stocks_movement_router
 from app.routes.corpdiary import router as corpdiary_router
@@ -57,6 +58,7 @@ app.include_router(announcement_router)
 app.include_router(marketind_router)
 app.include_router(marketindgraph_router)
 app.include_router(stockpulse_router)
+app.include_router(stocktrack_router)
 app.include_router(indstocktrend_router)
 app.include_router(indstockgraph_router)
 app.include_router(mostvaluedhouse_router)

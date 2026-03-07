@@ -1,7 +1,7 @@
 import uuid
 import shutil
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone,date
 from typing import List, Optional
 
 from fastapi import (
@@ -76,7 +76,7 @@ def delete_file(path: Optional[str]):
 def create_snapshot(
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
+    listing_date:date=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),
@@ -125,7 +125,7 @@ def update_snapshot(
     snapshot_id: int,
     company: str = Form(...),
     exchange: str = Form(...),
-    listing_date:datetime=Form(...),
+    listing_date:date=Form(...),
     content: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     pdf: Optional[UploadFile] = File(None),

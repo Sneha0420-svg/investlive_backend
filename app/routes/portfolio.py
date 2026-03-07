@@ -1,19 +1,20 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.models.portfolio import Stocks_Movements, PortfolioStocs
+from app.models.portfolio import Stocks_Movements, PortfolioStocs, Stock_MovementsUploadHistory
 import pandas as pd
 from decimal import Decimal
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime,date
 from typing import List
 import math
-
+import os
 router = APIRouter(
     prefix="/stocks_movements",
     tags=["Portfolio"]
 )
-
+UPLOAD_FOLDER = "uploads/Portfolio"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ------------------------
 # Pydantic Schemas
 # ------------------------
@@ -73,7 +74,7 @@ def clean_val(val):
 # Upload CSV and update stock movements
 # ------------------------
 @router.post("/upload-stock-csv")
-async def upload_stock_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_stock_csv(file: UploadFile = File(...),mkt_date:date=Form(...), db: Session = Depends(get_db)):
     if not file.filename.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
@@ -82,7 +83,26 @@ async def upload_stock_csv(file: UploadFile = File(...), db: Session = Depends(g
         df = pd.read_csv(pd.io.common.BytesIO(content), header=None, encoding="ISO-8859-1")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read CSV: {e}")
+    
+    # Save file to uploads folder
+    file_name = file.filename
+    file_path = os.path.join(UPLOAD_FOLDER, file_name)
 
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Save upload history
+    upload = Stock_MovementsUploadHistory(
+        file_name=file_name,
+        file_path=file_path,
+        mkt_date=mkt_date
+    )
+
+    db.add(upload)
+    db.commit()
+    db.refresh(upload)
+    
+    
     company_col = 2
     isin_col = 29
     ch_col = 5
@@ -117,7 +137,23 @@ async def upload_stock_csv(file: UploadFile = File(...), db: Session = Depends(g
 
     db.commit()
     return {"message": "CSV uploaded and stock movements updated successfully"}
+@router.get("/uploads")
+def get_uploads(db: Session = Depends(get_db)):
 
+    uploads = db.query(Stock_MovementsUploadHistory).order_by(
+        Stock_MovementsUploadHistory.uploaded_at.desc()
+    ).all()
+
+    return [
+        {
+            "id": u.id,
+            "file_name": u.file_name,
+            "fileUrl":  u.file_path.replace("\\","/") , 
+            "mkt_date":u.mkt_date,
+            "uploaded_at": u.uploaded_at
+        }
+        for u in uploads
+    ]
 # ------------------------
 # GET all stock movements
 # ------------------------

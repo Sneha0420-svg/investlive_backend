@@ -13,8 +13,9 @@ from app.models.ipoheatmap import IPOHeatmapYear,IPOHeatmapYearUpload,IPOHeatmap
 from app.models.news import News
 from app.models.announcement import Announcement
 from app.models.stockpulse import StockPulseData, StockPulseUpload
+from app.models.stocktrack import StockTrack,StockTrackUpload
 from app.models.heatmap import Company,House,Industry,Sector,CompanyUpload,HouseUpload,IndustryUpload,SectorUpload
-from app.models.portfolio import Stocks_Movements,PortfolioStocs
+from app.models.portfolio import Stocks_Movements,PortfolioStocs,Stock_MovementsUploadHistory
 from app.models.corpdiary import Bonus,BonusUpload,Split,SplitUpload,Div,DivUpload
 from app.models.newhighlow import FiftyTwoWeekHighLow, MultiYearHighLow
 from app.models.mcapgainerloser import (
