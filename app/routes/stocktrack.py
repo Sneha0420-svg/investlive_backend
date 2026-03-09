@@ -56,15 +56,15 @@ async def upload_stocktrack_csv(
                 stock = StockTrack(
                     mkt_date=mkt_date_obj,
                     isin=row["ISIN"].strip(),
-                    wk52=row["WK52"].strip() if row["WK52"] else "N",
-                    multi_yr=row["MULTI_YR"].strip() if row["MULTI_YR"] else "N",
-                    circuit=row["CIRCUIT"].strip() if row["CIRCUIT"] else "N",
-                    mobility=row["MOBILITY"].strip() if row["MOBILITY"] else "N",
-                    trend=row["TREND"].strip() if row["TREND"] else "N",
-                    wk_bust=row["WK_BUST"].strip() if row["WK_BUST"] else "N",
-                    mth_bust=row["MTH_BUST"].strip() if row["MTH_BUST"] else "N",
-                    qtr_bust=row["QTR_BUST"].strip() if row["QTR_BUST"] else "N",
-                    yr_bust=row["YR_BUST"].strip() if row["YR_BUST"] else "N",
+                    wk52=row["WK52"].strip() if row["WK52"] else None,
+                    multi_yr=row["MULTI_YR"].strip() if row["MULTI_YR"] else None,
+                    circuit=row["CIRCUIT"].strip() if row["CIRCUIT"] else None,
+                    mobility=row["MOBILITY"].strip() if row["MOBILITY"] else None,
+                    trend=row["TREND"].strip() if row["TREND"] else None,
+                    wk_bust=row["WK_BUST"].strip() if row["WK_BUST"] else None,
+                    mth_bust=row["MTH_BUST"].strip() if row["MTH_BUST"] else None,
+                    qtr_bust=row["QTR_BUST"].strip() if row["QTR_BUST"] else None,
+                    yr_bust=row["YR_BUST"].strip() if row["YR_BUST"] else None,
                 )
                 db.add(stock)
 
