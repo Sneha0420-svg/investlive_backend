@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.auth import router as auth_router
+from app.routes.marketdate import router as marketdate_router
 from app.routes.marketind import router as marketind_router
 from app.routes.marketindgraph import router as marketindgraph_router
 from app.routes.instocktrend import router as indstocktrend_router
@@ -52,7 +53,9 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {"message": "Backend run successfully"}
+
 app.include_router(auth_router)
+app.include_router(marketdate_router)
 app.include_router(news_router)
 app.include_router(announcement_router)
 app.include_router(marketind_router)

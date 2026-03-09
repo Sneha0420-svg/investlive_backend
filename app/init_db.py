@@ -1,4 +1,5 @@
 from app.database import Base, engine
+from app.models.marketdate import MarketDate
 from app.models.marketind import StockData,MarketIndicatorUpload 
 from app.models.marketindgraph import MktGraph, MktGraphUploads
 from app.models.auth import User
