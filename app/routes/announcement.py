@@ -1,42 +1,17 @@
-import uuid
-import shutil
-from pathlib import Path
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import List, Optional
-
-from fastapi import (
-    APIRouter,
-    Depends,
-    UploadFile,
-    File,
-    Form,
-    HTTPException,
-)
-from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.announcement import Announcement
 from app.schemas.announcement import AnnouncementResponse
-
-# -------------------------------------------------------------------
-# Router setup
-# -------------------------------------------------------------------
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3
 
 router = APIRouter(
     prefix="/announcements",
     tags=["Announcements"]
 )
-
-# -------------------------------------------------------------------
-# Upload configuration
-# -------------------------------------------------------------------
-
-UPLOAD_DIR = Path("uploads/announcements")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-# -------------------------------------------------------------------
-# Database dependency
-# -------------------------------------------------------------------
 
 def get_db():
     db = SessionLocal()
@@ -45,34 +20,6 @@ def get_db():
     finally:
         db.close()
 
-# -------------------------------------------------------------------
-# File helper functions
-# -------------------------------------------------------------------
-
-def save_file(upload_file: UploadFile) -> str:
-    """
-    Save uploaded file with a unique name and return file path
-    """
-    ext = Path(upload_file.filename).suffix
-    filename = f"{uuid.uuid4()}{ext}"
-    file_path = UPLOAD_DIR / filename
-
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
-
-    return str(file_path)
-
-
-def delete_file(path: Optional[str]):
-    """
-    Delete file from disk if exists
-    """
-    if path and Path(path).exists():
-        Path(path).unlink()
-
-# -------------------------------------------------------------------
-# Create announcement
-# -------------------------------------------------------------------
 
 @router.post("/", response_model=AnnouncementResponse)
 def create_announcement(
@@ -84,41 +31,25 @@ def create_announcement(
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    announcement = Announcement(
+    ann = Announcement(
         company=company,
         announcement=announcement,
         url=url,
         announcements_type=announcements_type,
-       announcement_date = datetime.now(timezone.utc)
+        announcement_date=datetime.now(timezone.utc)
     )
 
     if image:
-        announcement.image_path = save_file(image)
-
+        ann.image_path = upload_file_to_s3(image, folder="announcements/images")
     if file:
-        announcement.file_path = save_file(file)
+        ann.file_path = upload_file_to_s3(file, folder="announcements/files")
 
-    db.add(announcement)
+    db.add(ann)
     db.commit()
-    db.refresh(announcement)
+    db.refresh(ann)
 
-    return announcement
+    return ann
 
-# -------------------------------------------------------------------
-# Get all announcements
-# -------------------------------------------------------------------
-
-@router.get("/", response_model=List[AnnouncementResponse])
-def get_announcements(db: Session = Depends(get_db)):
-    return (
-        db.query(Announcement)
-        .order_by(Announcement.announcement_date.desc())
-        .all()
-    )
-
-# -------------------------------------------------------------------
-# Update announcement
-# -------------------------------------------------------------------
 
 @router.put("/{announcement_id}", response_model=AnnouncementResponse)
 def update_announcement(
@@ -131,58 +62,47 @@ def update_announcement(
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    announcement = db.query(Announcement).filter(
-        Announcement.id == announcement_id
-    ).first()
+    ann = db.query(Announcement).filter(Announcement.id == announcement_id).first()
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
 
-    if not announcement:
-        raise HTTPException(
-            status_code=404,
-            detail="Announcement not found"
-        )
-
-    announcement.company = company
-    announcement.announcement = announcement
-    announcement.announcements_type = announcements_type
-    announcement.url = url
-    announcement.announcement_date = datetime.utcnow()
+    ann.company = company
+    ann.announcement = announcement
+    ann.announcements_type = announcements_type
+    ann.url = url
+    ann.announcement_date = datetime.now(timezone.utc)
 
     if image:
-        delete_file(announcement.image_path)
-        announcement.image_path = save_file(image)
-
+        delete_file_from_s3(ann.image_path)
+        ann.image_path = upload_file_to_s3(image, folder="announcements/images")
     if file:
-        delete_file(announcement.file_path)
-        announcement.file_path = save_file(file)
+        delete_file_from_s3(ann.file_path)
+        ann.file_path = upload_file_to_s3(file, folder="announcements/files")
 
     db.commit()
-    db.refresh(announcement)
+    db.refresh(ann)
 
-    return announcement
+    return ann
 
-# -------------------------------------------------------------------
-# Delete announcement
-# -------------------------------------------------------------------
 
 @router.delete("/{announcement_id}")
 def delete_announcement(
     announcement_id: int,
     db: Session = Depends(get_db),
 ):
-    announcement = db.query(Announcement).filter(
-        Announcement.id == announcement_id
-    ).first()
+    ann = db.query(Announcement).filter(Announcement.id == announcement_id).first()
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
 
-    if not announcement:
-        raise HTTPException(
-            status_code=404,
-            detail="Announcement not found"
-        )
+    delete_file_from_s3(ann.image_path)
+    delete_file_from_s3(ann.file_path)
 
-    delete_file(announcement.image_path)
-    delete_file(announcement.file_path)
-
-    db.delete(announcement)
+    db.delete(ann)
     db.commit()
 
     return {"message": "Announcement deleted successfully"}
+
+
+@router.get("/", response_model=List[AnnouncementResponse])
+def get_announcements(db: Session = Depends(get_db)):
+    return db.query(Announcement).order_by(Announcement.announcement_date.desc()).all()

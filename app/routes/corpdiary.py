@@ -1,29 +1,22 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
-from app.database import SessionLocal
-from app.models.corpdiary import (
-    Bonus,
-    Split,
-    Div,
-    BonusUpload,
-    SplitUpload,
-    DivUpload,
-)
-from fastapi.responses import FileResponse
-from fastapi import Path
-import pandas as pd
+import io
 import uuid
-import shutil
-import os
 from datetime import datetime
 from typing import List
+
+import pandas as pd
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Path
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.database import SessionLocal
+from app.models.corpdiary import (
+    Bonus, Split, Div, BonusUpload, SplitUpload, DivUpload
+)
 from app.schemas.heatmap import UploadBase
+from app.s3_utils import upload_file_to_s3, get_file_stream_from_s3, delete_file_from_s3
 
 router = APIRouter(prefix="/corpdiary", tags=["corpdiary"])
-
-UPLOAD_FOLDER = "uploads/heatmap"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ---------------- DB Dependency ----------------
 def get_db():
@@ -33,12 +26,12 @@ def get_db():
     finally:
         db.close()
 
-# ---------------- CSV Columns (CSV HAS ID, BUT WE IGNORE IT) ----------------
+
+# ---------------- CSV Columns ----------------
 SPLIT_COLUMNS = ["ID", "ISIN", "OLD_FV", "NEW_FV", "EX_DT", "INDIC"]
 BONUS_COLUMNS = ["ID", "ISIN", "BONUS", "PRE", "EX_DT", "INDIC"]
 DIV_COLUMNS = ["ID", "ISIN", "DIV_RATE", "DIV_TYPE", "EX_DT"]
 
-# ---------------- Maps ----------------
 TABLE_MAP = {
     "split": (Split, SplitUpload, SPLIT_COLUMNS),
     "bonus": (Bonus, BonusUpload, BONUS_COLUMNS),
@@ -51,7 +44,7 @@ UPLOAD_TABLES = {
     "dividend": DivUpload,
 }
 
-# ---------------- Upload CSV ----------------
+
 @router.post("/upload/")
 async def upload_file(
     upload_date: str = Form(...),
@@ -61,7 +54,6 @@ async def upload_file(
     db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
-
     if data_type not in TABLE_MAP:
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
@@ -70,16 +62,19 @@ async def upload_file(
 
     Model, UploadModel, expected_columns = TABLE_MAP[data_type]
 
-    # ---------- Save file ----------
-    file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.csv")
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # ---------- Read file into memory ----------
+    content = await file.read()  # bytes
+    file_like = io.BytesIO(content)  # in-memory stream
+
+    # ---------- Upload to S3 ----------
+    s3_key = upload_file_to_s3(file_obj=file_like, folder=f"corpdiary/{data_type}", filename=file.filename)
 
     # ---------- Read CSV ----------
+    import pandas as pd
     try:
-        df = pd.read_csv(file_path, header=None, encoding="utf-8")
+        df = pd.read_csv(io.BytesIO(content), header=None, encoding="utf-8")
     except UnicodeDecodeError:
-        df = pd.read_csv(file_path, header=None, encoding="latin1")
+        df = pd.read_csv(io.BytesIO(content), header=None, encoding="latin1")
 
     if df.shape[1] != len(expected_columns):
         raise HTTPException(
@@ -90,16 +85,11 @@ async def upload_file(
     df.columns = expected_columns
     df = df.where(pd.notnull(df), None)
 
+    # ---------- Prepare ORM objects ----------
     model_columns = set(Model.__table__.columns.keys())
     objects = []
-
-    # ---------- Build ORM objects (IGNORE ID) ----------
     for _, row in df.iterrows():
-        record = {
-            col: row[col]
-            for col in expected_columns
-            if col in model_columns and col != "ID"
-        }
+        record = {col: row[col] for col in expected_columns if col in model_columns and col != "ID"}
         objects.append(Model(**record))
 
     if not objects:
@@ -112,15 +102,16 @@ async def upload_file(
         data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
         data_type=data_type,
         file_name=file.filename,
-        file_path=file_path,
+        file_path=s3_key
     )
 
     try:
         db.add(upload_entry)
         db.bulk_save_objects(objects)
         db.commit()
-    except SQLAlchemyError as e:
+    except Exception as e:
         db.rollback()
+        delete_file_from_s3(s3_key)
         raise HTTPException(status_code=500, detail=str(e))
 
     return {
@@ -128,8 +119,8 @@ async def upload_file(
         "data_type": data_type,
         "file": file.filename,
         "rows_inserted": len(objects),
+        "s3_key": s3_key
     }
-
 # ---------------- Get all uploads ----------------
 @router.get("/{data_type}/", response_model=List[UploadBase])
 def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
@@ -153,10 +144,13 @@ def get_latest_upload_file(data_type: str, db: Session = Depends(get_db)):
     if not latest:
         raise HTTPException(status_code=404, detail="No uploads found")
 
-    df = pd.read_csv(latest.file_path, header=None)
+    file_stream = get_file_stream_from_s3(latest.file_path)
+    if not file_stream:
+        raise HTTPException(status_code=404, detail="File not found on S3")
+
+    df = pd.read_csv(file_stream, header=None)
     df.columns = expected_columns
     df = df.where(pd.notnull(df), None)
-
     return df.to_dict(orient="records")
 
 # ---------------- Latest upload filtered by ISIN ----------------
@@ -172,24 +166,29 @@ def get_latest_upload_by_isin(data_type: str, isin: str, db: Session = Depends(g
     if not latest:
         raise HTTPException(status_code=404, detail="No uploads found")
 
-    df = pd.read_csv(latest.file_path, header=None)
+    file_stream = get_file_stream_from_s3(latest.file_path)
+    if not file_stream:
+        raise HTTPException(status_code=404, detail="File not found on S3")
+
+    df = pd.read_csv(file_stream, header=None)
     df.columns = expected_columns
     df = df.where(pd.notnull(df), None)
 
     df["ISIN"] = df["ISIN"].astype(str).str.strip()
     isin = isin.strip()
-
     filtered = df[df["ISIN"] == isin]
 
     if filtered.empty:
         raise HTTPException(status_code=404, detail="No records found for this ISIN")
 
     return filtered.to_dict(orient="records")
-@router.get("/{data_type}/files/{upload_id}", response_class=FileResponse)
+
+# ---------------- Download file from S3 ----------------
+@router.get("/{data_type}/files/{upload_id}")
 def download_file(
-    data_type: str = Path(..., description="Type of data: bonus,dividend,split"),
-    upload_id: int = Path(..., description="ID of the uploaded file"),
-    db: Session = Depends(get_db)
+    data_type: str = Path(...),
+    upload_id: int = Path(...),
+    db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
@@ -197,66 +196,66 @@ def download_file(
 
     UploadModel = UPLOAD_TABLES[data_type]
     upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
 
-    if not upload or not os.path.exists(upload.file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+    file_stream = get_file_stream_from_s3(upload.file_path)
+    if not file_stream:
+        raise HTTPException(status_code=404, detail="File not found on S3")
 
-    return FileResponse(
-        path=upload.file_path,
-        filename=upload.file_name,
-        media_type="application/octet-stream"
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={upload.file_name}"},
     )
 
-
-
-# ---------------- Update upload metadata ----------------
-@router.put("/{data_type}/{upload_id}/", response_model=dict)
+# ---------------- Update upload ----------------
+@router.put("/{data_type}/{upload_id}/")
 async def update_upload(
     data_type: str,
     upload_id: int,
     upload_date: str = Form(None),
     data_date: str = Form(None),
-    new_data_type: str = Form(None),  # allows changing type
-    file: UploadFile = File(None),    # allows updating the file
+    new_data_type: str = Form(None),
+    file: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
-        raise HTTPException(status_code=400, detail="Invalid original data_type")
+        raise HTTPException(status_code=400, detail="Invalid data_type")
 
     UploadModel = UPLOAD_TABLES[data_type]
     upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    # ---------- Update dates ----------
+    # Update dates
     if upload_date:
         upload.upload_date = datetime.strptime(upload_date, "%Y-%m-%d").date()
     if data_date:
         upload.data_date = datetime.strptime(data_date, "%Y-%m-%d").date()
 
-    # ---------- Update data_type ----------
+    # Update type
     if new_data_type:
         new_data_type = new_data_type.lower()
         if new_data_type not in UPLOAD_TABLES:
-            raise HTTPException(status_code=400, detail="Invalid new data_type")
+            raise HTTPException(status_code=400, detail="Invalid new_data_type")
         upload.data_type = new_data_type
 
-    # ---------- Update file ----------
+    # Update file
     if file:
         if not file.filename.lower().endswith(".csv"):
             raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
-        # Save new file
-        file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.csv")
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+        # Upload new file to S3
+        new_s3_key = upload_file_to_s3(file, f"corpdiary/{data_type}")
 
-        # Optionally delete old file
-        if os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
+        # Delete old S3 file
+        if upload.file_path:
+            delete_file_from_s3(upload.file_path)
+
         upload.file_name = file.filename
-        upload.file_path = file_path
+        upload.file_path = new_s3_key
 
     db.commit()
     db.refresh(upload)
@@ -266,9 +265,8 @@ async def update_upload(
         "data_date": str(upload.data_date),
         "data_type": upload.data_type,
         "file_name": upload.file_name,
-        "file_path": upload.file_path
+        "file_path": upload.file_path,
     }
-
 
 # ---------------- Delete upload ----------------
 @router.delete("/{data_type}/{upload_id}/")
@@ -279,12 +277,12 @@ def delete_upload(data_type: str, upload_id: int, db: Session = Depends(get_db))
 
     UploadModel = UPLOAD_TABLES[data_type]
     upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
-
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    if os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    # Delete file from S3
+    if upload.file_path:
+        delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()

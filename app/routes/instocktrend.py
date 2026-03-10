@@ -1,8 +1,6 @@
-import os
 import io
 from datetime import date
 from typing import List, Dict, Any
-from uuid import uuid4
 
 import pandas as pd
 from fastapi import (
@@ -13,21 +11,18 @@ from fastapi import (
     HTTPException,
     Form
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import SessionLocal
 from app.models.instocktrend import InstockTrendData, Indstocktrendupload
-
-UPLOAD_FOLDER = "uploads/indstocktrend"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
 
 router = APIRouter(
     prefix="/indstocktrend",
     tags=["InstockTrend"]
 )
-
 
 # -------------------- DB DEPENDENCY --------------------
 def get_db():
@@ -38,7 +33,7 @@ def get_db():
         db.close()
 
 
-# -------------------- UPLOAD EXCEL --------------------
+# -------------------- UPLOAD FILES --------------------
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -51,46 +46,46 @@ async def upload_multiple_data(
     upload_ids = []
 
     for file in files:
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
 
-        # Save file
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        contents = await file.read()
+        s3_stream = io.BytesIO(contents)
 
-        # Save upload metadata
+        # Upload file to S3
+        s3_key = upload_file_to_s3(s3_stream, "indstocktrend")
+        file_stream = io.BytesIO(contents)
         upload_record = Indstocktrendupload(
             upload_date=upload_date,
             data_date=data_date,
             data_type=data_type,
-            file_name=filename,
-            file_path=file_path
+            file_name=file.filename,
+            file_path=s3_key
         )
+
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
+
         upload_ids.append(upload_record.id)
 
-        # Read Excel / CSV (NO HEADER)
+        file_stream.seek(0)
+
+        # Read file
         try:
-            if filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_path, header=None)
-            elif filename.endswith(".csv"):
-                df = pd.read_csv(file_path, header=None)
+            if file.filename.endswith((".xlsx", ".xls")):
+                df = pd.read_excel(file_stream, header=None)
+            elif file.filename.endswith(".csv"):
+                df = pd.read_csv(file_stream, header=None)
             else:
                 raise HTTPException(400, "Invalid file type")
         except Exception as e:
             raise HTTPException(400, f"Failed to read file: {e}")
 
-        # Validate structure
         if df.shape[1] != 8:
             raise HTTPException(
                 400,
-                "Excel must have exactly 8 columns: "
-                "Metric, Count, Day, Week, Month, Quarter, Halfyear, Year"
+                "Excel must have exactly 8 columns: Metric, Count, Day, Week, Month, Quarter, Halfyear, Year"
             )
 
-        # Assign correct column names
         df.columns = [
             "description",
             "count",
@@ -102,7 +97,6 @@ async def upload_multiple_data(
             "year"
         ]
 
-        # Insert rows
         for _, row in df.iterrows():
             all_records.append(
                 InstockTrendData(
@@ -133,9 +127,10 @@ async def upload_multiple_data(
     }
 
 
-# -------------------- LIST UPLOADS --------------------
+# -------------------- GET ALL UPLOADS --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
+
     uploads = db.query(Indstocktrendupload).order_by(
         Indstocktrendupload.upload_date.desc()
     ).all()
@@ -159,23 +154,29 @@ def get_uploads(db: Session = Depends(get_db)):
 # -------------------- DOWNLOAD FILE --------------------
 @router.get("/files/{upload_id}")
 def download_file(upload_id: int, db: Session = Depends(get_db)):
+
     upload = db.query(Indstocktrendupload).filter(
         Indstocktrendupload.id == upload_id
     ).first()
 
-    if not upload or not os.path.exists(upload.file_path):
+    if not upload:
         raise HTTPException(404, "File not found")
 
-    return FileResponse(
-        upload.file_path,
-        filename=upload.file_name,
-        media_type="application/octet-stream"
+    file_stream = get_file_stream_from_s3(upload.file_path)
+
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={upload.file_name}"
+        }
     )
 
 
 # -------------------- GET LATEST DATA --------------------
 @router.get("/stockdata/", response_model=Dict[str, Any])
 def get_latest_stock_data(db: Session = Depends(get_db)):
+
     latest = db.query(Indstocktrendupload).order_by(
         desc(Indstocktrendupload.upload_date),
         desc(Indstocktrendupload.data_date)
@@ -217,6 +218,7 @@ def get_latest_stock_data(db: Session = Depends(get_db)):
 # -------------------- DELETE UPLOAD --------------------
 @router.delete("/uploads/{upload_id}")
 def delete_upload(upload_id: int, db: Session = Depends(get_db)):
+
     upload = db.query(Indstocktrendupload).filter(
         Indstocktrendupload.id == upload_id
     ).first()
@@ -230,8 +232,7 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
         InstockTrendData.type == upload.data_type
     ).delete(synchronize_session=False)
 
-    if upload.file_path and os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()
@@ -241,16 +242,18 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
         "upload_id": upload_id,
         "rows_deleted": deleted_rows
     }
+
+
 # -------------------- UPDATE UPLOAD --------------------
 @router.put("/uploads/{upload_id}")
 async def update_upload(
     upload_id: int,
-    file: UploadFile = File(None),  # optional new file
-    upload_date: date = Form(None),  # optional new upload date
-    data_date: date = Form(None),    # optional new data date
+    file: UploadFile = File(None),
+    upload_date: date = Form(None),
+    data_date: date = Form(None),
     db: Session = Depends(get_db)
 ):
-    # Fetch existing upload
+
     upload = db.query(Indstocktrendupload).filter(
         Indstocktrendupload.id == upload_id
     ).first()
@@ -258,53 +261,41 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Update dates if provided
     if upload_date:
         upload.upload_date = upload_date
+
     if data_date:
         upload.data_date = data_date
 
-    # If a new file is provided, replace it
+    new_records = []
+
     if file:
-        # Delete old file
-        if upload.file_path and os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
 
-        # Save new file
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        delete_file_from_s3(upload.file_path)
 
-        # Update metadata
-        upload.file_name = filename
-        upload.file_path = file_path
+        contents = await file.read()
+        file_like = io.BytesIO(contents)
 
-        # Optional: re-read Excel/CSV and update InstockTrendData
-        # Delete old data rows
+        s3_key = upload_file_to_s3(file_like, "indstocktrend")
+
+        upload.file_name = file.filename
+        upload.file_path = s3_key
+
         db.query(InstockTrendData).filter(
             InstockTrendData.upload_date == upload.upload_date,
             InstockTrendData.data_date == upload.data_date,
             InstockTrendData.type == upload.data_type
         ).delete(synchronize_session=False)
 
-        # Read new file
-        try:
-            if filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_path, header=None)
-            elif filename.endswith(".csv"):
-                df = pd.read_csv(file_path, header=None)
-            else:
-                raise HTTPException(400, "Invalid file type")
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file: {e}")
+        file_like.seek(0)
+
+        if file.filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(file_like, header=None)
+        else:
+            df = pd.read_csv(file_like, header=None)
 
         if df.shape[1] != 8:
-            raise HTTPException(
-                400,
-                "Excel must have exactly 8 columns: "
-                "Metric, Count, Day, Week, Month, Quarter, Halfyear, Year"
-            )
+            raise HTTPException(400, "File must have 8 columns")
 
         df.columns = [
             "description",
@@ -317,7 +308,6 @@ async def update_upload(
             "year"
         ]
 
-        # Insert new rows
         new_records = [
             InstockTrendData(
                 description=str(row["description"]),
@@ -335,8 +325,7 @@ async def update_upload(
             for _, row in df.iterrows()
         ]
 
-        if new_records:
-            db.bulk_save_objects(new_records)
+        db.bulk_save_objects(new_records)
 
     db.commit()
     db.refresh(upload)
@@ -347,5 +336,5 @@ async def update_upload(
         "file_name": upload.file_name,
         "upload_date": upload.upload_date,
         "data_date": upload.data_date,
-        "records_inserted": len(new_records) if file else 0
+        "records_inserted": len(new_records)
     }

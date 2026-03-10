@@ -2,15 +2,13 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from datetime import date
 from uuid import uuid4
-import os
 import pandas as pd
-from fastapi.responses import FileResponse
 
+from fastapi.responses import StreamingResponse
 from app.database import SessionLocal
 from app.models.indstocksnapshot_graph import IndStockGraph, IndStockGraphUpload
-
-UPLOAD_FOLDER = "uploads/indstockgraph"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
+import io
 
 router = APIRouter(prefix="/indstockgraph", tags=["IndStock Graph"])
 
@@ -35,17 +33,18 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     group_id = str(uuid4())
-    filename = f"{date.today()}_{uuid4()}_{file.filename}"
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    contents = await file.read()
+    file_like = io.BytesIO(contents)
+    # Upload to S3
+    s3_folder = "indstockgraphgraph"
+    s3_key = upload_file_to_s3(file_obj=file_like, folder=s3_folder, filename=file.filename)
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-
-    # Read Excel / CSV (no header)
-    if filename.endswith(".csv"):
-        df = pd.read_csv(file_path, header=None)
+    # Read CSV / Excel from file memory
+    file.file.seek(0)
+    if file.filename.lower().endswith(".csv"):
+        df = pd.read_csv(file.file, header=None)
     else:
-        df = pd.read_excel(file_path, header=None)
+        df = pd.read_excel(file.file, header=None)
 
     if df.shape[1] != 6:
         raise HTTPException(
@@ -55,9 +54,6 @@ async def upload_file(
 
     df.columns = ["ID", "TRN_DATE", "STKS_TRD", "ADV", "DECL", "UNCHG"]
     df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
-
-    # Full refresh: delete existing records with same group_id (new upload, so none yet)
-    # db.query(IndStockGraph).filter(IndStockGraph.group_id==group_id).delete(synchronize_session=False)
 
     records = [
         IndStockGraph(
@@ -76,8 +72,8 @@ async def upload_file(
         upload_date=upload_date,
         data_date=data_date,
         data_type="IndStockGraph",
-        file_name=filename,
-        file_path=file_path
+        file_name=file.filename,
+        file_path=s3_key  # S3 key instead of local path
     )
 
     db.add(upload_row)
@@ -95,24 +91,20 @@ def get_uploads(db: Session = Depends(get_db)):
          "data_date": u.data_date, "file_name": u.file_name}
         for u in uploads
     ]
+
 # ---------------- Get Latest Data ----------------
 @router.get("/latest")
 def get_latest_data(db: Session = Depends(get_db)):
-    # Step 1: Get the latest upload by data_date
     latest_upload = db.query(IndStockGraphUpload).order_by(IndStockGraphUpload.data_date.desc()).first()
-    
     if not latest_upload:
         raise HTTPException(404, "No upload data found")
 
-    # Step 2: Get all graph records for this upload's group_id
     latest_records = db.query(IndStockGraph).filter(
         IndStockGraph.group_id == latest_upload.group_id
     ).all()
 
-    # Convert ORM objects to dict using correct column names
-    result = []
-    for r in latest_records:
-        row = {
+    result = [
+        {
             "ID": r.ID,
             "TRN_DATE": r.TRN_DATE,
             "STKS_TRD": r.STKS_TRD,
@@ -120,8 +112,8 @@ def get_latest_data(db: Session = Depends(get_db)):
             "DECL": r.DECL,
             "UNCHG": r.UNCHG,
             "group_id": r.group_id
-        }
-        result.append(row)
+        } for r in latest_records
+    ]
 
     return {
         "upload_id": latest_upload.id,
@@ -136,9 +128,10 @@ def download_file(group_id: str, db: Session = Depends(get_db)):
     upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
-    if not os.path.exists(upload.file_path):
-        raise HTTPException(404, "File not found on server")
-    return FileResponse(path=upload.file_path, filename=upload.file_name, media_type="application/octet-stream")
+
+    # Stream from S3
+    file_stream = get_file_stream_from_s3(upload.file_path)
+    return StreamingResponse(file_stream, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename={upload.file_name}"})
 
 # ---------------- Update Upload ----------------
 @router.put("/upload/{group_id}")
@@ -159,25 +152,24 @@ async def update_upload(
         upload.data_date = data_date
 
     if file:
-        if os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
+        # Delete old file from S3
+        delete_file_from_s3(upload.file_path)
 
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        # Upload new file
+        s3_folder = "indstockgraph"
+        s3_key = upload_file_to_s3(file_obj=file.file, folder=s3_folder, filename=file.filename)
+        upload.file_name = file.filename
+        upload.file_path = s3_key
 
-        upload.file_name = filename
-        upload.file_path = file_path
-
-        # Delete old data for this group_id
+        # Delete old data
         db.query(IndStockGraph).filter(IndStockGraph.group_id == group_id).delete(synchronize_session=False)
 
         # Read new file
-        if filename.endswith(".csv"):
-            df = pd.read_csv(file_path, header=None)
+        file.file.seek(0)
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(file.file, header=None)
         else:
-            df = pd.read_excel(file_path, header=None)
+            df = pd.read_excel(file.file, header=None)
 
         if df.shape[1] != 6:
             raise HTTPException(400, "File must have exactly 6 columns")
@@ -208,10 +200,11 @@ def delete_upload(group_id: str, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Delete all records
     db.query(IndStockGraph).filter(IndStockGraph.group_id == group_id).delete(synchronize_session=False)
 
-    if upload.file_path and os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    # Delete file from S3
+    delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()

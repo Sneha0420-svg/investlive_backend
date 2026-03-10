@@ -71,5 +71,6 @@ class UploadSummaryResponse(BaseModel):
     data_type: str
     file_name: str
     file_link: str
+    records_inserted: int
     class Config:
         from_attributes = True
