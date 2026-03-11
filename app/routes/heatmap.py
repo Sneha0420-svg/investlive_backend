@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 import uuid
 import io 
+from fastapi.responses import StreamingResponse
 
 
 router = APIRouter(prefix="/heatmap", tags=["heatmap"])
@@ -304,6 +305,43 @@ async def update_upload(
         "file_name": upload.file_name,
         "file_path": upload.file_path
     }
+    
+
+@router.get("/{data_type}/files/{upload_id}/")
+def download_file(
+    data_type: str,
+    upload_id: int,
+    db: Session = Depends(get_db)
+):
+
+    data_type = data_type.lower()
+
+    if data_type not in UPLOAD_TABLES:
+        raise HTTPException(400, "Invalid data_type")
+
+    UploadModel = UPLOAD_TABLES[data_type]
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.id == upload_id
+    ).first()
+
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+
+    # ---------- Get stream from S3 ----------
+    file_stream = get_file_stream_from_s3(upload.file_path)
+
+    if not file_stream:
+        raise HTTPException(404, "File not found in S3")
+
+    return StreamingResponse(
+        file_stream,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{upload.file_name}"'
+        }
+    )
+
 # ---------------- Delete upload ----------------
 @router.delete("/{data_type}/{upload_id}/", response_model=dict)
 def delete_upload(data_type: str, upload_id: int, db: Session = Depends(get_db)):
@@ -323,19 +361,3 @@ def delete_upload(data_type: str, upload_id: int, db: Session = Depends(get_db))
     db.commit()
 
     return {"status": "deleted", "id": upload_id}
-
-# ---------------- Download file ----------------
-@router.get("/{data_type}/files/{upload_id}/")
-def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db)):
-    data_type = data_type.lower()
-    if data_type not in UPLOAD_TABLES:
-        raise HTTPException(status_code=400, detail="Invalid data_type")
-
-    UploadModel = UPLOAD_TABLES[data_type]
-    upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
-    if not upload:
-        raise HTTPException(status_code=404, detail="Upload not found")
-
-    # Stream file from S3
-    file_stream = get_file_stream_from_s3(upload.file_path)
-    return file_stream  # can wrap in StreamingResponse if needed

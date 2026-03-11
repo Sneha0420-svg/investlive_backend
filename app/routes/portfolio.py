@@ -1,20 +1,26 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from sqlalchemy.orm import Session
-from app.database import SessionLocal
-from app.models.portfolio import Stocks_Movements, PortfolioStocs, Stock_MovementsUploadHistory
-import pandas as pd
-from decimal import Decimal
-from pydantic import BaseModel
-from datetime import datetime,date
+from datetime import datetime, date
 from typing import List
+import pandas as pd
 import math
-import os
+import io
+
+from app.database import SessionLocal
+from app.models.portfolio import (
+    Stocks_Movements,
+    PortfolioStocs,
+    Stock_MovementsUploadHistory
+)
+from app.s3_utils import upload_file_to_s3, get_s3_file_url  # make sure these exist
+
+from pydantic import BaseModel
+
 router = APIRouter(
     prefix="/stocks_movements",
     tags=["Portfolio"]
 )
-UPLOAD_FOLDER = "uploads/Portfolio"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 # ------------------------
 # Pydantic Schemas
 # ------------------------
@@ -74,40 +80,41 @@ def clean_val(val):
 # Upload CSV and update stock movements
 # ------------------------
 @router.post("/upload-stock-csv")
-async def upload_stock_csv(file: UploadFile = File(...),mkt_date:date=Form(...), db: Session = Depends(get_db)):
+async def upload_stock_csv(
+    file: UploadFile = File(...),
+    mkt_date: date = Form(...),
+    db: Session = Depends(get_db)
+):
     if not file.filename.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
+    # Read file content
+    content = await file.read()
     try:
-        content = await file.read()
-        df = pd.read_csv(pd.io.common.BytesIO(content), header=None, encoding="ISO-8859-1")
+        df = pd.read_csv(io.BytesIO(content), header=None, encoding="ISO-8859-1")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read CSV: {e}")
-    
-    # Save file to uploads folder
-    file_name = file.filename
-    file_path = os.path.join(UPLOAD_FOLDER, file_name)
 
-    with open(file_path, "wb") as f:
-        f.write(content)
+    # Upload CSV to S3 under separate folder "stocks_movements"
+    s3_key = upload_file_to_s3(io.BytesIO(content), folder="stocks_movements")
 
-    # Save upload history
+    # Save upload history in DB
     upload = Stock_MovementsUploadHistory(
-        file_name=file_name,
-        file_path=file_path,
+        file_name=file.filename,
+        file_path=s3_key,
         mkt_date=mkt_date
     )
-
     db.add(upload)
     db.commit()
     db.refresh(upload)
-    
-    
+
+    # CSV column indices
     company_col = 2
     isin_col = 29
     ch_col = 5
 
-    for idx, row in df.iterrows():
+    # Update or insert stock movements
+    for _, row in df.iterrows():
         company = str(row[company_col]).strip()
         isin = str(row[isin_col]).strip()
         try:
@@ -136,10 +143,17 @@ async def upload_stock_csv(file: UploadFile = File(...),mkt_date:date=Form(...),
             db.add(stock)
 
     db.commit()
-    return {"message": "CSV uploaded and stock movements updated successfully"}
+    return {
+        "message": "CSV uploaded and stock movements updated successfully",
+        "upload_id": upload.id,
+        "file_url": get_s3_file_url(s3_key)
+    }
+
+# ------------------------
+# Get all uploads
+# ------------------------
 @router.get("/uploads")
 def get_uploads(db: Session = Depends(get_db)):
-
     uploads = db.query(Stock_MovementsUploadHistory).order_by(
         Stock_MovementsUploadHistory.uploaded_at.desc()
     ).all()
@@ -148,12 +162,13 @@ def get_uploads(db: Session = Depends(get_db)):
         {
             "id": u.id,
             "file_name": u.file_name,
-            "fileUrl":  u.file_path.replace("\\","/") , 
-            "mkt_date":u.mkt_date,
+            "file_url": get_s3_file_url(u.file_path),
+            "mkt_date": u.mkt_date,
             "uploaded_at": u.uploaded_at
         }
         for u in uploads
     ]
+
 # ------------------------
 # GET all stock movements
 # ------------------------
@@ -163,7 +178,7 @@ def get_stock_movements(db: Session = Depends(get_db)):
     if not stocks:
         raise HTTPException(status_code=404, detail="No stock movements found")
 
-    result = [
+    return [
         {
             "company": s.company,
             "isin": s.isin,
@@ -174,7 +189,6 @@ def get_stock_movements(db: Session = Depends(get_db)):
             "Day_5": clean_val(s.Day_5),
         } for s in stocks
     ]
-    return result
 
 # ------------------------
 # GET a single stock by ISIN

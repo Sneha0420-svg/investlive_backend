@@ -1,13 +1,14 @@
 # app/routes/volumemoving.py
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from datetime import date, timedelta, datetime
 import csv
 from sqlalchemy import func
 from app.models.volumemoving import VolumeMoving
 from app.database import SessionLocal
-
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
+import io
 router = APIRouter(prefix="/volumemoving", tags=["VolumeMoving"])
 
 
@@ -23,7 +24,16 @@ def get_db():
 
 
 # ----------------------
-# Upload CSV (Auto delimiter + auto date format)
+# Helper: Safe strip
+# ----------------------
+def safe_strip(val):
+    if val is None:
+        return None
+    return str(val).strip()
+
+
+# ----------------------
+# Upload CSV to S3
 # ----------------------
 @router.post("/upload")
 def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -32,16 +42,25 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
     try:
-        content = file.file.read().decode("utf-8-sig").splitlines()
-
-        if not content:
+        # ----------------------
+        # Read file into memory
+        # ----------------------
+        content_bytes = file.file.read()  # read once
+        if not content_bytes:
             raise HTTPException(status_code=400, detail="CSV file is empty")
 
-        # ✅ Auto detect delimiter (TAB or comma)
-        first_line = content[0]
-        delimiter = "\t" if "\t" in first_line else ","
+        # ----------------------
+        # Upload to S3
+        # ----------------------
+        s3_key = upload_file_to_s3(io.BytesIO(content_bytes), f"volumemoving/{datetime.today().strftime('%Y%m%d')}_{file.filename}")
 
-        reader = csv.reader(content, delimiter=delimiter, skipinitialspace=True)
+        # ----------------------
+        # Parse CSV from memory
+        # ----------------------
+        content_str = content_bytes.decode("utf-8-sig").splitlines()
+        first_line = content_str[0]
+        delimiter = "\t" if "\t" in first_line else ","
+        reader = csv.reader(content_str, delimiter=delimiter, skipinitialspace=True)
 
         records_added = 0
         records_updated = 0
@@ -52,19 +71,23 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
                 continue
 
             try:
-                sccode = row[0].strip()
-                scrip = row[1].strip()
-                cocode = row[2].strip()
-                isin = row[3].strip()
-                curvol = int(row[4].strip())
+                # Safely convert values to strings
+                sccode = str(row[0]).strip() if row[0] is not None else None
+                scrip = str(row[1]).strip() if row[1] is not None else None
+                cocode = str(row[2]).strip() if row[2] is not None else None
+                isin = str(row[3]).strip() if row[3] is not None else None
 
-                # ✅ Auto handle both date formats
-                date_str = row[5].strip()
+                # Handle CURVOL safely (might be float or int)
+                curvol = int(float(row[4])) if row[4] not in (None, "") else None
+
+                # Auto parse date formats
+                date_str = str(row[5]).strip()
                 try:
                     trn_date = datetime.strptime(date_str, "%d-%m-%Y").date()
                 except ValueError:
                     trn_date = datetime.strptime(date_str, "%Y-%m-%d").date()
 
+                # Check if record exists
                 existing = (
                     db.query(VolumeMoving)
                     .filter(VolumeMoving.ISIN == isin)
@@ -99,14 +122,15 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
         return {
             "message": "Upload completed",
+            "s3_key": s3_key,
             "records_inserted": records_added,
             "records_updated": records_updated,
+            "errors": errors
         }
 
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ----------------------
 # Get Last 2 Years Volume Data by ISIN
@@ -137,11 +161,7 @@ def get_graph_data_by_isin(isin: str, db: Session = Depends(get_db)):
 # Get All Data (Pagination)
 # ----------------------
 @router.get("/all")
-def get_all_data(
-    limit: int = 1000,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
+def get_all_data(limit: int = 1000, offset: int = 0, db: Session = Depends(get_db)):
 
     data = (
         db.query(VolumeMoving)
@@ -173,44 +193,37 @@ def get_sccodes(db: Session = Depends(get_db)):
     sccodes = db.query(VolumeMoving.SCCODE, VolumeMoving.SCRIP).distinct().all()
     return [{"SCCODE": s[0], "SCRIP": s[1]} for s in sccodes]
 
-# ----------------------
-# Delete VolumeMoving records for a specific TRN_DATE
-# ----------------------
-from fastapi import Query
 
+# ----------------------
+# Delete VolumeMoving records by TRN_DATE
+# ----------------------
 @router.delete("/delete")
 def delete_by_trn_date(
     trn_date: str = Query(..., description="Date of the upload to delete in YYYY-MM-DD format"),
     db: Session = Depends(get_db)
 ):
-    """
-    Delete all VolumeMoving records for a specific TRN_DATE
-    """
     try:
         date_obj = datetime.strptime(trn_date, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-    # Check if any records exist
     existing = db.query(VolumeMoving).filter(VolumeMoving.TRN_DATE == date_obj).all()
     if not existing:
         raise HTTPException(status_code=404, detail="No records found for this date")
 
-    # Delete records
     deleted_count = db.query(VolumeMoving).filter(VolumeMoving.TRN_DATE == date_obj).delete(synchronize_session=False)
     db.commit()
 
     return {
         "message": f"Deleted {deleted_count} records for TRN_DATE {trn_date}"
     }
-    # ----------------------
+
+
+# ----------------------
 # Get all upload dates with total records
 # ----------------------
 @router.get("/uploads")
 def get_all_uploads(db: Session = Depends(get_db)):
-    """
-    Return all upload dates (TRN_DATE) with total records for each date
-    """
     uploads = (
         db.query(
             VolumeMoving.TRN_DATE,

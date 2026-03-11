@@ -1,10 +1,13 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
-from sqlalchemy.orm import Session
+import io
 from datetime import date
+from typing import List, Dict, Any
 from uuid import uuid4
-import os
+
 import pandas as pd
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
 from app.database import SessionLocal
 from app.models.mostvaluedcharts import (
@@ -13,16 +16,16 @@ from app.models.mostvaluedcharts import (
     MostValHouseChart,
     MostValHouseChartUpload
 )
+from app.s3_utils import (
+    upload_file_to_s3,
+    delete_file_from_s3,
+    get_file_stream_from_s3,
+    get_s3_file_url
+)
 
 router = APIRouter(prefix="/mostvaluedcharts", tags=["Most Valued Charts"])
 
-UPLOAD_BASE = "uploads/mostvaluedcharts"
-os.makedirs(UPLOAD_BASE, exist_ok=True)
-
-
-# ============================================================
-# DB Session
-# ============================================================
+# -------------------- DB DEPENDENCY --------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -30,62 +33,39 @@ def get_db():
     finally:
         db.close()
 
-
-# ============================================================
-# Helper: Get Models by Category
-# ============================================================
+# -------------------- Helpers --------------------
 def get_models(category: str):
     if category == "company":
-        return (
-            MostValCompanyChart,
-            MostValCompanyChartUpload,
-            ["COMPANY", "ISIN", "VAL", "TRN_DATE"]  # first column ignored
-        )
+        return MostValCompanyChart, MostValCompanyChartUpload, ["COMPANY", "ISIN", "VAL", "TRN_DATE"]
     elif category == "house":
-        return (
-            MostValHouseChart,
-            MostValHouseChartUpload,
-            ["H_ID", "HOUSE_NAME", "VALUE", "TRN_DATE"]  # first column ignored
-        )
+        return MostValHouseChart, MostValHouseChartUpload, ["H_ID", "HOUSE_NAME", "VALUE", "TRN_DATE"]
     else:
         raise HTTPException(400, "Invalid category. Use 'company' or 'house'.")
 
+def read_file_from_bytes(file_bytes: bytes, required_columns: list, category: str):
+    # Read Excel first, fallback to CSV
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+    except Exception:
+        try:
+            df = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), header=None)
+        except Exception:
+            raise HTTPException(400, f"Failed to read {category} file as CSV or Excel.")
 
-# ============================================================
-# Helper: Read File (ignore first column)
-# ============================================================
-def read_file_without_headers(file_path: str, required_columns: list, category: str):
-    # Read CSV or Excel
-    if file_path.endswith(".csv"):
-        df = pd.read_csv(file_path, header=None)
-    else:
-        df = pd.read_excel(file_path, header=None)
+    df = df.dropna(axis=1, how="all")  # remove empty columns
+    df = df.iloc[:, 1:1+len(required_columns)]  # ignore first column
 
-    # Remove fully empty columns
-    df = df.dropna(axis=1, how="all")
-
-    # Ignore the first column
-    df = df.iloc[:, 1:1 + len(required_columns)]
-
-    # Check column count
-    if df.shape[1] < len(required_columns):
+    if df.shape[1] != len(required_columns):
         raise HTTPException(
-            status_code=400,
-            detail=f"{category} file must contain at least {len(required_columns)+1} columns (first ignored)"
+            400,
+            detail=f"{category} file must have exactly {len(required_columns)+1} columns (first ignored)"
         )
 
-    # Assign proper column names
     df.columns = required_columns
-
-    # Convert date column
     df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
-
     return df
 
-
-# ============================================================
-# Upload
-# ============================================================
+# -------------------- UPLOAD --------------------
 @router.post("/{category}/upload")
 async def upload_file(
     category: str,
@@ -96,31 +76,23 @@ async def upload_file(
 ):
     DataModel, UploadModel, required_columns = get_models(category)
     group_id = str(uuid4())
+    file_bytes = await file.read()
+    
+    # Upload file to S3
+    s3_key = upload_file_to_s3(io.BytesIO(file_bytes), f"{category}/{uuid4()}_{file.filename}")
 
-    # Save file
-    category_folder = os.path.join(UPLOAD_BASE, category)
-    os.makedirs(category_folder, exist_ok=True)
-    filename = f"{date.today()}_{uuid4()}_{file.filename}"
-    file_path = os.path.join(category_folder, filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    # Read file into DataFrame
+    df = read_file_from_bytes(file_bytes, required_columns, category)
 
-    # Read file ignoring first column
-    df = read_file_without_headers(file_path, required_columns, category)
-
-    # Insert records
-    records = [
-        DataModel(**{col: row[col] for col in required_columns}, group_id=group_id)
-        for _, row in df.iterrows()
-    ]
-
+    # Insert DB records
+    records = [DataModel(**{col: row[col] for col in required_columns}, group_id=group_id) for _, row in df.iterrows()]
     upload_row = UploadModel(
         group_id=group_id,
         upload_date=upload_date,
         data_date=data_date,
         data_type=category,
-        file_name=filename,
-        file_path=file_path
+        file_name=file.filename,
+        file_path=s3_key
     )
 
     db.add(upload_row)
@@ -129,77 +101,56 @@ async def upload_file(
 
     return {
         "message": f"{category} file uploaded successfully",
-        "group_id": group_id
+        "group_id": group_id,
+        "file_s3_url": get_s3_file_url(s3_key)
     }
 
-# ============================================================
-# Get all uploads across all categories
-# ============================================================
+# -------------------- LIST ALL UPLOADS --------------------
 @router.get("/uploads/all")
 def get_all_uploads(db: Session = Depends(get_db)):
     all_uploads = []
-
-    # List of categories
-    categories = ["company", "house"]
-
-    for category in categories:
+    for category in ["company", "house"]:
         _, UploadModel, _ = get_models(category)
         uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
-        
-        # Add category info to each upload
         for u in uploads:
             all_uploads.append({
                 "group_id": u.group_id,
                 "file_name": u.file_name,
                 "upload_date": u.upload_date,
                 "data_date": u.data_date,
-                "category": category
+                "category": category,
+                "file_s3_url": get_s3_file_url(u.file_path)
             })
-
     return all_uploads
 
-# ============================================================
-# Get Latest Data
-# ============================================================
+# -------------------- GET LATEST --------------------
 @router.get("/{category}/latest")
 def get_latest(category: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _ = get_models(category)
-    latest_upload = db.query(UploadModel).order_by(
-        UploadModel.data_date.desc()
-    ).first()
-
+    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
     if not latest_upload:
         raise HTTPException(404, "No upload found")
-
-    data = db.query(DataModel).filter(
-        DataModel.group_id == latest_upload.group_id
-    ).all()
-
+    data = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
     return {
         "data_date": latest_upload.data_date,
         "records": data
     }
 
-
-# ============================================================
-# Download
-# ============================================================
+# -------------------- DOWNLOAD --------------------
 @router.get("/{category}/download/{group_id}")
 def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
     _, UploadModel, _ = get_models(category)
-    upload = db.query(UploadModel).filter(
-        UploadModel.group_id == group_id
-    ).first()
+    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+    file_stream = get_file_stream_from_s3(upload.file_path)
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
+    )
 
-    if not upload or not os.path.exists(upload.file_path):
-        raise HTTPException(404, "File not found")
-
-    return FileResponse(upload.file_path, filename=upload.file_name)
-
-
-# ============================================================
-# Update Upload
-# ============================================================
+# -------------------- UPDATE --------------------
 @router.put("/{category}/upload/{group_id}")
 async def update_upload(
     category: str,
@@ -210,10 +161,7 @@ async def update_upload(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, required_columns = get_models(category)
-    upload = db.query(UploadModel).filter(
-        UploadModel.group_id == group_id
-    ).first()
-
+    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
@@ -222,56 +170,48 @@ async def update_upload(
     if data_date:
         upload.data_date = data_date
 
+    new_records = []
+
     if file:
-        if upload.file_path and os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
+        # Delete old S3 file
+        delete_file_from_s3(upload.file_path)
+        # Upload new file to S3
+        file_bytes = await file.read()
+        s3_key = upload_file_to_s3(io.BytesIO(file_bytes), f"{category}/{uuid4()}_{file.filename}")
+        upload.file_name = file.filename
+        upload.file_path = s3_key
 
-        category_folder = os.path.join(UPLOAD_BASE, category)
-        os.makedirs(category_folder, exist_ok=True)
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(category_folder, filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-
-        upload.file_name = filename
-        upload.file_path = file_path
-
-        # Delete old records
+        # Delete old DB records
         db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
 
-        # Read new file ignoring first column
-        df = read_file_without_headers(file_path, required_columns, category)
-        new_records = [
-            DataModel(**{col: row[col] for col in required_columns}, group_id=group_id)
-            for _, row in df.iterrows()
-        ]
+        # Insert new records
+        df = read_file_from_bytes(file_bytes, required_columns, category)
+        new_records = [DataModel(**{col: row[col] for col in required_columns}, group_id=group_id) for _, row in df.iterrows()]
         db.bulk_save_objects(new_records)
 
     db.commit()
+    db.refresh(upload)
+
     return {
         "message": f"{category} upload updated successfully",
-        "group_id": group_id
+        "group_id": group_id,
+        "file_s3_url": get_s3_file_url(upload.file_path),
+        "records_inserted": len(new_records)
     }
 
-
-# ============================================================
-# Delete
-# ============================================================
+# -------------------- DELETE --------------------
 @router.delete("/{category}/upload/{group_id}")
 def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _ = get_models(category)
-    upload = db.query(UploadModel).filter(
-        UploadModel.group_id == group_id
-    ).first()
-
+    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Delete records
+    # Delete DB records
     db.query(DataModel).filter(DataModel.group_id == group_id).delete()
-    # Delete file
-    if upload.file_path and os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    # Delete S3 file
+    delete_file_from_s3(upload.file_path)
+
     db.delete(upload)
     db.commit()
 

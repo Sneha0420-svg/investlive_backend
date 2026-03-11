@@ -4,7 +4,6 @@ from datetime import datetime
 
 class NewsBase(BaseModel):
     source: str
-    heading: str
     title: Optional[str] = None
     content: str
     news_type: str

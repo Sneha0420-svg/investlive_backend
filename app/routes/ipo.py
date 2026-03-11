@@ -209,7 +209,8 @@ def get_uploads_summary(db: Session = Depends(get_db)):
             "data_date": u.data_date,
             "data_type": u.data_type,
             "file_name": u.file_name,
-            "file_link": f"/IPO/files/{u.id}"
+            "file_link": f"/IPO/files/{u.id}",
+            "records_inserted": None  # default for summary
         }
         for u in uploads
     ]
@@ -258,7 +259,7 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
         }
     )
 
-@router.put("/upload/{upload_id}", response_model=UploadSummaryResponse)
+@router.put("/upload/update/{upload_id}", response_model=UploadSummaryResponse)
 async def update_upload(
     upload_id: int,
     db: Session = Depends(get_db),

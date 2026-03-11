@@ -6,7 +6,8 @@ from datetime import date
 import pandas as pd
 import io
 import math
-
+from fastapi.responses import StreamingResponse
+from mimetypes import guess_type
 from app.models.marketind import StockData, MarketIndicatorUpload
 from app.database import SessionLocal
 from app.s3_utils import (
@@ -16,7 +17,6 @@ from app.s3_utils import (
 )
 
 router = APIRouter(tags=["Market Indicator"])
-
 
 # ---------------- DB Session ----------------
 def get_db():
@@ -46,30 +46,33 @@ def safe_float(value, default=0.0):
         return default
 
 
+def is_header_row(stock: StockData) -> bool:
+    numeric_fields = [stock.yr_ago, stock.curnt, stock.ch, stock.S_ID, stock.IDX_ID]
+    return all(f is None or f == 0 for f in numeric_fields)
+
+
 # ======================================================
 # Upload Multiple Files
 # ======================================================
-@router.post("/upload-data-multiple/")
+@router.post("/marketindicator/upload/")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
     mkt_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
+    if not files:
+        raise HTTPException(400, "No files provided")
 
     all_inserted = []
 
-    # Delete existing records for same date
-    existing_count = db.query(StockData).filter(
-        StockData.mkt_date == mkt_date
-    ).delete(synchronize_session=False)
-
+    # Delete existing records for the same date
+    deleted_count = db.query(StockData).filter(StockData.mkt_date == mkt_date).delete()
     db.commit()
 
     for file in files:
-
         contents = await file.read()
 
-        # Upload file to S3
+        # Upload to S3
         s3_key = upload_file_to_s3(io.BytesIO(contents), "market_indicator")
 
         upload_record = MarketIndicatorUpload(
@@ -77,41 +80,28 @@ async def upload_multiple_data(
             file_name=file.filename,
             file_path=s3_key
         )
-
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
 
-        # Read dataframe
+        # Read DataFrame
         try:
             if file.filename.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(io.BytesIO(contents), header=None)
             elif file.filename.endswith(".csv"):
                 df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
             else:
-                raise HTTPException(400, f"Invalid file type: {file.filename}")
+                raise HTTPException(400, f"Unsupported file type: {file.filename}")
         except Exception as e:
-            raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
+            raise HTTPException(400, f"Failed to read {file.filename}: {e}")
 
         if df.shape[1] < 9:
             raise HTTPException(400, f"{file.filename} must have at least 9 columns")
 
-        df.columns = [
-            "name",
-            "yr_ago",
-            "curnt",
-            "ch",
-            "H_ID",
-            "S_ID",
-            "IDX_ID",
-            "flag",
-            "ID"
-        ]
+        df.columns = ["name","yr_ago","curnt","ch","H_ID","S_ID","IDX_ID","flag","ID"]
 
-        records = []
-
-        for _, row in df.iterrows():
-            stock = StockData(
+        records = [
+            StockData(
                 name=str(row["name"]).strip() if row["name"] else "",
                 yr_ago=safe_float(row["yr_ago"]),
                 curnt=safe_float(row["curnt"]),
@@ -123,8 +113,8 @@ async def upload_multiple_data(
                 ID=safe_int(row["ID"]),
                 mkt_date=mkt_date
             )
-            records.append(stock)
-
+            for _, row in df.iterrows()
+        ]
         db.bulk_save_objects(records)
         db.commit()
 
@@ -135,87 +125,102 @@ async def upload_multiple_data(
         })
 
     return {
-        "message": f"{len(files)} files processed successfully. Existing rows deleted: {existing_count}",
+        "message": f"{len(files)} files uploaded. Existing rows deleted: {deleted_count}",
         "details": all_inserted
     }
 
 
 # ======================================================
-# Get Upload History
+# Get All Uploads
 # ======================================================
 @router.get("/marketindicator/uploads/")
 def get_uploads(db: Session = Depends(get_db)):
-
-    uploads = db.query(MarketIndicatorUpload)\
-        .order_by(MarketIndicatorUpload.mkt_date.desc()).all()
-
-    if not uploads:
-        raise HTTPException(404, "No uploads found")
-
-    return uploads
+    uploads = db.query(MarketIndicatorUpload).order_by(MarketIndicatorUpload.mkt_date.desc()).all()
+    return [
+        {
+            "id": u.id,
+            "file_name": u.file_name,
+            "file_path": ("/" + u.file_path.replace("\\", "/")) if u.file_path else None,
+            "mkt_date": u.mkt_date
+        } for u in uploads
+    ]
 
 
 # ======================================================
-# Download Uploaded File
+# Download File
 # ======================================================
-@router.get("/files/{upload_id}")
+@router.get("/marketindicator/files/{upload_id}")
 def download_file(upload_id: int, db: Session = Depends(get_db)):
 
-    record = db.query(MarketIndicatorUpload)\
-        .filter(MarketIndicatorUpload.id == upload_id).first()
-
+    # 1️⃣ Get the upload record
+    record = db.query(MarketIndicatorUpload).filter(MarketIndicatorUpload.id == upload_id).first()
     if not record:
         raise HTTPException(404, "File not found")
 
-    return get_file_stream_from_s3(record.file_path)
+    # 2️⃣ Get file stream from S3
+    file_stream = get_file_stream_from_s3(record.file_path)
+    if not file_stream:
+        raise HTTPException(404, "File content not found in S3")
+
+    # 3️⃣ Guess MIME type based on filename
+    mime_type, _ = guess_type(record.file_name)
+    mime_type = mime_type or "application/octet-stream"
+
+    # 4️⃣ Return StreamingResponse with appropriate headers
+    return StreamingResponse(
+        file_stream,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{record.file_name}"'}
+    )
 
 
 # ======================================================
 # Latest Market Indicator Data
 # ======================================================
-def is_header_row(stock: StockData) -> bool:
-    numeric_fields = [stock.yr_ago, stock.curnt, stock.ch, stock.S_ID, stock.IDX_ID]
-    return all(f is None or f == 0 for f in numeric_fields)
-
-
-@router.get("/marketindicator/latest/", response_model=Dict[str, Any])
+@router.get("/marketindicator/latest/")
 def get_latest_marketindicator(db: Session = Depends(get_db)):
 
     latest_date = db.query(func.max(StockData.mkt_date)).scalar()
-
     if not latest_date:
         raise HTTPException(404, "No stock data found")
 
+    # Stocks
     stocks = db.query(StockData)\
         .filter(StockData.mkt_date == latest_date)\
         .order_by(StockData.H_ID, StockData.ID).all()
 
-    tab_map = {
-        1: "Returns",
-        2: "Indices",
-        3: "Currencies",
-        4: "World P/E Ratio",
-        5: "Commodities"
-    }
+    # Uploaded files for latest date
+    uploads = db.query(MarketIndicatorUpload).filter(MarketIndicatorUpload.mkt_date == latest_date).all()
+    uploaded_files = [
+        {
+            "id": u.id,
+            "file_name": u.file_name,
+            "file_path": ("/" + u.file_path.replace("\\", "/")) if u.file_path else None
+        } for u in uploads
+    ]
 
+    # Tabs
+    tab_map = {1: "Returns",2: "Indices",3: "Currencies",4: "World P/E Ratio",5: "Commodities"}
     tab_sections = {
-        1: ["India Stocks", "Bullion", "Forex vs INR", "Crude"],
+        1: ["India  Stocks", "Bullion", "Forex vs INR", "Crude"],
         2: ["BRICS", "Asia/Pacific", "America/Europe"],
         3: ["INR vs.", "USD vs."],
         4: ["Country"],
         5: ["Metals (Kg)", "Agro-Cons (100 Kg)", "Agro-Indu (100 Kg)", "Energy (Rs)"]
     }
 
-    result = {tab: [] for tab in tab_map.values()}
-    current_section_per_tab = {}
+    result: Dict[str, List[Dict[str, Any]]] = {}  # start empty
+    current_section_per_tab: Dict[str, Dict[str, Any]] = {}
 
     for stock in stocks:
+        tab_name = tab_map.get(stock.H_ID, f"Unknown H_ID {stock.H_ID}")
 
-        tab_name = tab_map.get(stock.H_ID, "Unknown")
+        # create tab if not exists
+        if tab_name not in result:
+            result[tab_name] = []
+
         stock_name = (stock.name or "").strip()
-
         sections_for_tab = tab_sections.get(stock.H_ID, [])
-
         is_header = stock_name in sections_for_tab or is_header_row(stock)
 
         if is_header:
@@ -224,12 +229,10 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
             current_section_per_tab[tab_name] = section
         else:
             current_section = current_section_per_tab.get(tab_name)
-
             if not current_section:
                 current_section = {"title": "(No Title)", "rows": []}
                 result[tab_name].append(current_section)
                 current_section_per_tab[tab_name] = current_section
-
             current_section["rows"].append([
                 stock.name,
                 stock.yr_ago,
@@ -243,7 +246,8 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
     return {
         "latest_mkt_date": latest_date,
         "total_records": len(stocks),
-        "stocks_by_tab": result
+        "stocks_by_tab": result,
+        "uploaded_files": uploaded_files
     }
 
 
@@ -253,17 +257,13 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
 @router.get("/marketindicator/idx/{idx_id}")
 def get_stocks_by_idx(idx_id: int, db: Session = Depends(get_db)):
 
-    latest_date = db.query(func.max(StockData.mkt_date))\
-        .filter(StockData.IDX_ID == idx_id).scalar()
-
+    latest_date = db.query(func.max(StockData.mkt_date)).scalar()
     if not latest_date:
         raise HTTPException(404, f"No stock data found for IDX_ID {idx_id}")
 
     stocks = db.query(StockData)\
-        .filter(
-            StockData.IDX_ID == idx_id,
-            StockData.mkt_date == latest_date
-        ).order_by(StockData.H_ID, StockData.ID).all()
+        .filter(StockData.IDX_ID == idx_id, StockData.mkt_date == latest_date)\
+        .order_by(StockData.H_ID, StockData.ID).all()
 
     return stocks
 
@@ -274,18 +274,12 @@ def get_stocks_by_idx(idx_id: int, db: Session = Depends(get_db)):
 @router.delete("/marketindicator/uploads/{upload_id}")
 def delete_upload(upload_id: int, db: Session = Depends(get_db)):
 
-    upload = db.query(MarketIndicatorUpload)\
-        .filter(MarketIndicatorUpload.id == upload_id).first()
-
+    upload = db.query(MarketIndicatorUpload).filter(MarketIndicatorUpload.id == upload_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    deleted_rows = db.query(StockData)\
-        .filter(StockData.mkt_date == upload.mkt_date)\
-        .delete(synchronize_session=False)
-
+    deleted_rows = db.query(StockData).filter(StockData.mkt_date == upload.mkt_date).delete()
     delete_file_from_s3(upload.file_path)
-
     db.delete(upload)
     db.commit()
 

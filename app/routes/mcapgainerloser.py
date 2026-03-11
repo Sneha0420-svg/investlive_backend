@@ -3,25 +3,31 @@ from sqlalchemy.orm import Session
 from datetime import date
 from uuid import uuid4
 import pandas as pd
-import os
 import math
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
+import io 
 
 from app.database import SessionLocal
 from app.models.mcapgainerloser import (
     McapGainersLosers,
     McapGainersLosersUpload,
-   Upward_DownwardMobile,
-   Upward_DownwardMobileUpload,
-   Up_DownTrend,
+    Upward_DownwardMobile,
+    Upward_DownwardMobileUpload,
+    Up_DownTrend,
     Up_DownTrendUpload
 )
 
-UPLOAD_FOLDER = "uploads/gainer_loser"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+from app.s3_utils import (
+    upload_file_to_s3,
+    delete_file_from_s3,
+    get_file_stream_from_s3,
+    get_s3_file_url
+)
 
 router = APIRouter(prefix="/gainloss", tags=["Gainers / Losers"])
 
+
+# ---------------- DB Dependency ----------------
 
 def get_db():
     db = SessionLocal()
@@ -30,11 +36,53 @@ def get_db():
     finally:
         db.close()
 
-# ---------- helper ----------
+
+# ---------------- Helper ----------------
+
 def clean_nan(val):
     return None if isinstance(val, float) and math.isnan(val) else val
 
-# ---------- Upload endpoint ----------
+
+def validate_category(category):
+    if category not in CATEGORIES:
+        raise HTTPException(
+            400,
+            "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
+        )
+
+
+# ---------------- Category Mapping ----------------
+
+CATEGORIES = {
+    "mcap_movers": {
+        "data": McapGainersLosers,
+        "upload": McapGainersLosersUpload,
+        "cols": [
+            "COMPANY","ISIN","CMP","MCAP_CR","CH_CR","CH_PER",
+            "VOL_NOS","VOL_CH_PER","DAY_HIGH","DAY_LOW",
+            "60DMA","60DMA_PER","245DMA","245DMA_PER","52WKH","52WKL"
+        ]
+    },
+
+    "up_down_mobile": {
+        "data": Upward_DownwardMobile,
+        "upload": Upward_DownwardMobileUpload,
+        "cols": [
+            "COMPANY","ISIN","CMP","START","DAYS","CH_PER","PERDAY"
+        ]
+    },
+
+    "up_down_trend": {
+        "data": Up_DownTrend,
+        "upload": Up_DownTrendUpload,
+        "cols": [
+            "COMPANY","ISIN","CMP","5DMA","21DMA","60DMA","245DMA","CH_PER"
+        ]
+    }
+}
+
+
+# ---------------- Upload ----------------
 @router.post("/upload/{category}")
 async def upload_file(
     category: str,
@@ -43,40 +91,28 @@ async def upload_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
+
     if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
         raise HTTPException(
             400,
             "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
         )
 
-    # ---------- create unique group_id and save file ----------
-    group_id = str(uuid4())
-    filename = f"{date.today()}_{uuid4()}_{file.filename}"
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    contents = await file.read()
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    # upload to S3
+    s3_key = upload_file_to_s3(io.BytesIO(contents), f"gainloss/{category}")
 
-    # ---------- read file ----------
-    if filename.endswith(".csv"):
-        df = pd.read_csv(file_path, header=None)
-    else:
-        df = pd.read_excel(file_path, header=None)
-
-    # ---------- select models & columns ----------
+    # select models
     if category == "mcap_movers":
         DataModel = McapGainersLosers
         UploadModel = McapGainersLosersUpload
 
         expected_cols = 16
-        df.columns = [
-            "COMPANY", "ISIN", "CMP",
-            "MCAP_CR", "CH_CR", "CH_PER",
-            "VOL_NOS", "VOL_CH_PER",
-            "DAY_HIGH", "DAY_LOW",
-            "60DMA", "60DMA_PER",
-            "245DMA", "245DMA_PER",
-            "52WKH", "52WKL"
+        columns = [
+            "COMPANY","ISIN","CMP","MCAP_CR","CH_CR","CH_PER",
+            "VOL_NOS","VOL_CH_PER","DAY_HIGH","DAY_LOW",
+            "60DMA","60DMA_PER","245DMA","245DMA_PER","52WKH","52WKL"
         ]
 
     elif category == "up_down_mobile":
@@ -84,42 +120,53 @@ async def upload_file(
         UploadModel = Upward_DownwardMobileUpload
 
         expected_cols = 7
-        df.columns = [
-            "COMPANY", "ISIN", "CMP",
-            "START", "DAYS",
-            "CH_PER", "PERDAY"
+        columns = [
+            "COMPANY","ISIN","CMP","START","DAYS","CH_PER","PERDAY"
         ]
 
-    else:  # up_down_trend
+    else:
         DataModel = Up_DownTrend
         UploadModel = Up_DownTrendUpload
 
         expected_cols = 8
-        df.columns = [
-            "COMPANY", "ISIN", "CMP",
-            "5DMA", "21DMA", "60DMA", "245DMA",
-            "CH_PER"
+        columns = [
+            "COMPANY","ISIN","CMP","5DMA","21DMA","60DMA","245DMA","CH_PER"
         ]
 
-    # ---------- validate columns ----------
+    # save upload record
+    upload_record = UploadModel(
+        group_id=str(uuid4()),
+        upload_date=upload_date,
+        data_date=data_date,
+        category=category,
+        file_name=file.filename,
+        file_path=s3_key
+    )
+
+    db.add(upload_record)
+    db.commit()
+    db.refresh(upload_record)
+
+    # read dataframe
+    try:
+        if file.filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(contents), header=None)
+        elif file.filename.endswith(".csv"):
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
+        else:
+            raise HTTPException(400, "Invalid file type")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to read file: {e}")
+
     if df.shape[1] != expected_cols:
         raise HTTPException(
             400,
             f"{category} file must have exactly {expected_cols} columns"
         )
 
-    # ---------- store upload info ----------
-    upload_row = UploadModel(
-        group_id=group_id,
-        upload_date=upload_date,
-        data_date=data_date,
-        category=category,
-        file_name=filename,
-        file_path=file_path
-    )
-    db.add(upload_row)
+    df.columns = columns
 
-    # ---------- check latest upload ----------
+    # delete previous latest data if newer
     latest_upload = (
         db.query(UploadModel)
         .order_by(UploadModel.data_date.desc())
@@ -129,130 +176,106 @@ async def upload_file(
     if not latest_upload or data_date >= latest_upload.data_date:
         db.query(DataModel).delete(synchronize_session=False)
 
-        # ---------- parse and save ----------
+    records = []
+
+    for _, r in df.iterrows():
+
         if category == "mcap_movers":
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
-                    ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    MCAP_CR=clean_nan(r["MCAP_CR"]),
-                    CH_CR=clean_nan(r["CH_CR"]),
-                    CH_PER=clean_nan(r["CH_PER"]),
-                    VOL_NOS=clean_nan(r["VOL_NOS"]),
-                    VOL_CH_PER=clean_nan(r["VOL_CH_PER"]),
-                    DAY_HIGH=clean_nan(r["DAY_HIGH"]),
-                    DAY_LOW=clean_nan(r["DAY_LOW"]),
-                    DMA_60=clean_nan(r["60DMA"]),
-                    DMA_PER_60=clean_nan(r["60DMA_PER"]),
-                    DMA_245=clean_nan(r["245DMA"]),
-                    DMA_PER_245=clean_nan(r["245DMA_PER"]),
-                    WKH_52=clean_nan(r["52WKH"]),
-                    WKL_52=clean_nan(r["52WKL"]),
-                    group_id=group_id
-                )
-                for _, r in df.iterrows()
-            ]
+
+            record = DataModel(
+                COMPANY=r["COMPANY"],
+                ISIN=r["ISIN"],
+                CMP=r["CMP"],
+                MCAP_CR=r["MCAP_CR"],
+                CH_CR=r["CH_CR"],
+                CH_PER=r["CH_PER"],
+                VOL_NOS=r["VOL_NOS"],
+                VOL_CH_PER=r["VOL_CH_PER"],
+                DAY_HIGH=r["DAY_HIGH"],
+                DAY_LOW=r["DAY_LOW"],
+                DMA_60=r["60DMA"],
+                DMA_PER_60=r["60DMA_PER"],
+                DMA_245=r["245DMA"],
+                DMA_PER_245=r["245DMA_PER"],
+                WKH_52=r["52WKH"],
+                WKL_52=r["52WKL"],
+                group_id=upload_record.group_id
+            )
 
         elif category == "up_down_mobile":
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
-                    ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    START=clean_nan(r["START"]),
-                    DAYS=int(r["DAYS"]) if pd.notna(r["DAYS"]) else None,
-                    CH_PER=clean_nan(r["CH_PER"]),
-                    PERDAY=clean_nan(r["PERDAY"]),
-                    group_id=group_id
-                )
-                for _, r in df.iterrows()
-            ]
 
-        else:  # up_down_trend
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
-                    ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    DMA_5=clean_nan(r["5DMA"]),
-                    DMA_21=clean_nan(r["21DMA"]),
-                    DMA_60=clean_nan(r["60DMA"]),
-                    DMA_245=clean_nan(r["245DMA"]),
-                    CH_PER=clean_nan(r["CH_PER"]),
-                    group_id=group_id
-                )
-                for _, r in df.iterrows()
-            ]
+            record = DataModel(
+                COMPANY=r["COMPANY"],
+                ISIN=r["ISIN"],
+                CMP=r["CMP"],
+                START=r["START"],
+                DAYS=r["DAYS"],
+                CH_PER=r["CH_PER"],
+                PERDAY=r["PERDAY"],
+                group_id=upload_record.group_id
+            )
 
-        db.bulk_save_objects(records)
+        else:
 
+            record = DataModel(
+                COMPANY=r["COMPANY"],
+                ISIN=r["ISIN"],
+                CMP=r["CMP"],
+                DMA_5=r["5DMA"],
+                DMA_21=r["21DMA"],
+                DMA_60=r["60DMA"],
+                DMA_245=r["245DMA"],
+                CH_PER=r["CH_PER"],
+                group_id=upload_record.group_id
+            )
+
+        records.append(record)
+
+    db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": f"{category} data uploaded successfully",
-        "group_id": group_id,
-        "records": len(df)
+        "message": f"{category} uploaded successfully",
+        "records_inserted": len(records),
+        "upload_id": upload_record.id
     }
+
+# ---------------- Upload History ----------------
+
 @router.get("/uploads/{category}")
-def get_uploads(
-    category: str,
-    db: Session = Depends(get_db)
-):
-    # ---------- validate category ----------
-    if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
-        raise HTTPException(
-            400, "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
-        )
+def get_uploads(category: str, db: Session = Depends(get_db)):
 
-    # ---------- select upload model ----------
-    if category == "mcap_movers":
-        UploadModel = McapGainersLosersUpload
-    elif category == "up_down_mobile":
-        UploadModel = Upward_DownwardMobileUpload
-    else:  # up_down_trend
-        UploadModel = Up_DownTrendUpload
+    validate_category(category)
 
-    # ---------- fetch uploads ----------
-    uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+    UploadModel = CATEGORIES[category]["upload"]
 
-    # ---------- serialize ----------
+    uploads = db.query(UploadModel).order_by(
+        UploadModel.upload_date.desc()
+    ).all()
+
     return [
         {
             "id": u.id,
             "group_id": u.group_id,
             "upload_date": u.upload_date,
             "data_date": u.data_date,
-            "file_name": u.file_name
+            "file_name": u.file_name,
+            "file_url": get_s3_file_url(u.file_path)
         }
         for u in uploads
     ]
 
+
+# ---------------- Latest Data ----------------
+
 @router.get("/latest/{category}")
-def get_latest_data(
-    category: str,
-    db: Session = Depends(get_db)
-):
-    if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
-        raise HTTPException(
-            400,
-            "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
-        )
+def get_latest_data(category: str, db: Session = Depends(get_db)):
 
-    # ---------- select models ----------
-    if category == "mcap_movers":
-        UploadModel = McapGainersLosersUpload
-        DataModel = McapGainersLosers
+    validate_category(category)
 
-    elif category == "up_down_mobile":
-        UploadModel = Upward_DownwardMobileUpload
-        DataModel = Upward_DownwardMobile
+    UploadModel = CATEGORIES[category]["upload"]
+    DataModel = CATEGORIES[category]["data"]
 
-    else:  # up_down_trend
-        UploadModel = Up_DownTrendUpload
-        DataModel = Up_DownTrend
-
-    # ---------- get latest upload ----------
     latest_upload = (
         db.query(UploadModel)
         .order_by(UploadModel.data_date.desc())
@@ -260,25 +283,18 @@ def get_latest_data(
     )
 
     if not latest_upload:
-        return {
-            "latest_data_date": None,
-            "records": [],
-            "count": 0
-        }
+        return {"latest_data_date": None, "records": [], "count": 0}
 
-    # ---------- fetch latest records ----------
-    data_rows = (
-        db.query(DataModel)
-        .filter(DataModel.group_id == latest_upload.group_id)
-        .all()
-    )
+    rows = db.query(DataModel).filter(
+        DataModel.group_id == latest_upload.group_id
+    ).all()
 
-    # ---------- serialize ----------
     records = []
-    for row in data_rows:
-        r = row.__dict__.copy()
-        r.pop("_sa_instance_state", None)
-        records.append(r)
+
+    for r in rows:
+        row = r.__dict__.copy()
+        row.pop("_sa_instance_state", None)
+        records.append(row)
 
     return {
         "latest_data_date": latest_upload.data_date,
@@ -286,45 +302,34 @@ def get_latest_data(
         "count": len(records)
     }
 
+
+# ---------------- Download File ----------------
+
 @router.get("/download/{category}/{group_id}")
-def download_file(
-    category: str,
-    group_id: str,
-    db: Session = Depends(get_db)
-):
-    # ---------- validate category ----------
-    if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
-        raise HTTPException(
-            400,
-            "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
-        )
+def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
 
-    # ---------- select upload model ----------
-    if category == "mcap_movers":
-        UploadModel = McapGainersLosersUpload
-    elif category == "up_down_mobile":
-        UploadModel = Upward_DownwardMobileUpload
-    else:  # up_down_trend
-        UploadModel = Up_DownTrendUpload
+    validate_category(category)
 
-    # ---------- fetch upload by group_id ----------
-    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
+    UploadModel = CATEGORIES[category]["upload"]
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.group_id == group_id
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # ---------- check file existence ----------
-    if not upload.file_path or not os.path.exists(upload.file_path):
-        raise HTTPException(404, "File not found on server")
+    file_stream = get_file_stream_from_s3(upload.file_path)
 
-    # ---------- return file ----------
-    return FileResponse(
-        path=upload.file_path,
-        filename=upload.file_name,
-        media_type="application/octet-stream"
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={upload.file_name}"
+        }
     )
-
 @router.put("/upload/{category}/{group_id}")
-async def update_file_upload(
+async def update_upload(
     category: str,
     group_id: str,
     upload_date: date = Form(None),
@@ -332,128 +337,139 @@ async def update_file_upload(
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    # ---------- validate category ----------
+
     if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
         raise HTTPException(
             400,
             "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
         )
 
-    # ---------- select models ----------
+    # select models
     if category == "mcap_movers":
-        UploadModel = McapGainersLosersUpload
         DataModel = McapGainersLosers
+        UploadModel = McapGainersLosersUpload
         expected_cols = 16
-        df_columns = [
-            "COMPANY", "ISIN", "CMP", "MCAP_CR", "GAIN_CR", "GAIN_PER",
-            "VOL_NOS", "VOL_CH_PER", "DAY_HIGH", "DAY_LOW",
-            "DMA_60", "DMA_60_PER", "DMA_245", "DMA_245_PER", "WKH_52", "WKL_52"
+        columns = [
+            "COMPANY","ISIN","CMP","MCAP_CR","CH_CR","CH_PER",
+            "VOL_NOS","VOL_CH_PER","DAY_HIGH","DAY_LOW",
+            "60DMA","60DMA_PER","245DMA","245DMA_PER","52WKH","52WKL"
         ]
-    elif category == "up_down_mobile":
-        UploadModel = Upward_DownwardMobileUpload
-        DataModel = Upward_DownwardMobile
-        expected_cols = 7
-        df_columns = ["COMPANY", "ISIN", "CMP", "START", "DAYS", "CH_PER", "PERDAY"]
-    else:  # up_down_trend
-        UploadModel = Up_DownTrendUpload
-        DataModel = Up_DownTrend
-        expected_cols = 8
-        df_columns = ["COMPANY", "ISIN", "CMP", "DMA_5", "DMA_21", "DMA_60", "DMA_245", "CH_PER"]
 
-    # ---------- fetch upload ----------
-    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
+    elif category == "up_down_mobile":
+        DataModel = Upward_DownwardMobile
+        UploadModel = Upward_DownwardMobileUpload
+        expected_cols = 7
+        columns = ["COMPANY","ISIN","CMP","START","DAYS","CH_PER","PERDAY"]
+
+    else:
+        DataModel = Up_DownTrend
+        UploadModel = Up_DownTrendUpload
+        expected_cols = 8
+        columns = ["COMPANY","ISIN","CMP","5DMA","21DMA","60DMA","245DMA","CH_PER"]
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.group_id == group_id
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # ---------- update dates ----------
+    # update metadata
     if upload_date:
         upload.upload_date = upload_date
+
     if data_date:
         upload.data_date = data_date
 
-    # ---------- replace file ----------
     if file:
-        # remove old file
-        if os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
 
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        contents = await file.read()
 
-        upload.file_name = filename
-        upload.file_path = file_path
+        # delete old S3 file
+        if upload.file_path:
+            delete_file_from_s3(upload.file_path)
 
-        # delete old data
-        db.query(DataModel).delete(synchronize_session=False)
+        # upload new file
+        s3_key = upload_file_to_s3(io.BytesIO(contents), f"gainloss/{category}")
 
-        # read new file
-        if filename.endswith(".csv"):
-            df = pd.read_csv(file_path, header=None)
-        else:
-            df = pd.read_excel(file_path, header=None)
+        upload.file_name = file.filename
+        upload.file_path = s3_key
+
+        # read dataframe
+        try:
+            if file.filename.endswith((".xlsx", ".xls")):
+                df = pd.read_excel(io.BytesIO(contents), header=None)
+            elif file.filename.endswith(".csv"):
+                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
+            else:
+                raise HTTPException(400, "Invalid file type")
+        except Exception as e:
+            raise HTTPException(400, f"Failed to read file: {e}")
 
         if df.shape[1] != expected_cols:
             raise HTTPException(
                 400,
                 f"{category} file must have exactly {expected_cols} columns"
             )
-        df.columns = df_columns
 
-        # parse records
-        if category == "mcap_movers":
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
+        df.columns = columns
+
+        # delete old records for this upload
+        db.query(DataModel).filter(
+            DataModel.group_id == group_id
+        ).delete(synchronize_session=False)
+
+        records = []
+
+        for _, r in df.iterrows():
+
+            if category == "mcap_movers":
+                record = DataModel(
+                    COMPANY=r["COMPANY"],
                     ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    MCAP_CR=clean_nan(r["MCAP_CR"]),
-                    GAIN_CR=clean_nan(r["GAIN_CR"]),
-                    GAIN_PER=clean_nan(r["GAIN_PER"]),
-                    VOL_NOS=clean_nan(r["VOL_NOS"]),
-                    VOL_CH_PER=clean_nan(r["VOL_CH_PER"]),
-                    DAY_HIGH=clean_nan(r["DAY_HIGH"]),
-                    DAY_LOW=clean_nan(r["DAY_LOW"]),
-                    DMA_60=clean_nan(r["DMA_60"]),
-                    DMA_60_PER=clean_nan(r["DMA_60_PER"]),
-                    DMA_245=clean_nan(r["DMA_245"]),
-                    DMA_245_PER=clean_nan(r["DMA_245_PER"]),
-                    WKH_52=clean_nan(r["WKH_52"]),
-                    WKL_52=clean_nan(r["WKL_52"]),
-                    group_id=group_id,
+                    CMP=r["CMP"],
+                    MCAP_CR=r["MCAP_CR"],
+                    CH_CR=r["CH_CR"],
+                    CH_PER=r["CH_PER"],
+                    VOL_NOS=r["VOL_NOS"],
+                    VOL_CH_PER=r["VOL_CH_PER"],
+                    DAY_HIGH=r["DAY_HIGH"],
+                    DAY_LOW=r["DAY_LOW"],
+                    DMA_60=r["60DMA"],
+                    DMA_PER_60=r["60DMA_PER"],
+                    DMA_245=r["245DMA"],
+                    DMA_PER_245=r["245DMA_PER"],
+                    WKH_52=r["52WKH"],
+                    WKL_52=r["52WKL"],
+                    group_id=group_id
                 )
-                for _, r in df.iterrows()
-            ]
-        elif category == "up_down_mobile":
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
+
+            elif category == "up_down_mobile":
+                record = DataModel(
+                    COMPANY=r["COMPANY"],
                     ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    START=clean_nan(r["START"]),
-                    DAYS=int(r["DAYS"]) if r["DAYS"] is not None else None,
-                    CH_PER=clean_nan(r["CH_PER"]),
-                    PERDAY=clean_nan(r["PERDAY"]),
-                    group_id=group_id,
+                    CMP=r["CMP"],
+                    START=r["START"],
+                    DAYS=r["DAYS"],
+                    CH_PER=r["CH_PER"],
+                    PERDAY=r["PERDAY"],
+                    group_id=group_id
                 )
-                for _, r in df.iterrows()
-            ]
-        else:  # up_down_trend
-            records = [
-                DataModel(
-                    COMPANY=clean_nan(r["COMPANY"]),
+
+            else:
+                record = DataModel(
+                    COMPANY=r["COMPANY"],
                     ISIN=r["ISIN"],
-                    CMP=clean_nan(r["CMP"]),
-                    DMA_5=clean_nan(r["DMA_5"]),
-                    DMA_21=clean_nan(r["DMA_21"]),
-                    DMA_60=clean_nan(r["DMA_60"]),
-                    DMA_245=clean_nan(r["DMA_245"]),
-                    CH_PER=clean_nan(r["CH_PER"]),
-                    group_id=group_id,
+                    CMP=r["CMP"],
+                    DMA_5=r["5DMA"],
+                    DMA_21=r["21DMA"],
+                    DMA_60=r["60DMA"],
+                    DMA_245=r["245DMA"],
+                    CH_PER=r["CH_PER"],
+                    group_id=group_id
                 )
-                for _, r in df.iterrows()
-            ]
+
+            records.append(record)
 
         db.bulk_save_objects(records)
 
@@ -463,30 +479,19 @@ async def update_file_upload(
         "message": "Upload updated successfully",
         "group_id": group_id
     }
+# ---------------- Delete Upload ----------------
 
 @router.delete("/upload/{category}/{group_id}")
-def delete_new_high_low_upload(
+def delete_file_upload(
     category: str,
     group_id: str,
     db: Session = Depends(get_db)
 ):
-    if category not in ["52-week", "multi-year","circuit"]:
-        raise HTTPException(400, "Invalid category")
 
-    UploadModel = (
-        McapGainersLosersUpload
-        if category == "52-week"
-        else Upward_DownwardMobileUpload
-        if category == "circuit"
-        else  Up_DownTrendUpload
-    )
-    DataModel = (
-        McapGainersLosers
-        if category == "52-week"
-        else Upward_DownwardMobile
-        if category == "circuit"
-        else  Up_DownTrend
-    )
+    validate_category(category)
+
+    DataModel = CATEGORIES[category]["data"]
+    UploadModel = CATEGORIES[category]["upload"]
 
     upload = db.query(UploadModel).filter(
         UploadModel.group_id == group_id
@@ -495,54 +500,14 @@ def delete_new_high_low_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # delete data
-    db.query(DataModel).delete(synchronize_session=False)
+    db.query(DataModel).filter(
+        DataModel.group_id == group_id
+    ).delete(synchronize_session=False)
 
-    # delete file
-    if os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
-    db.commit()
 
-    return {"message": "Upload deleted successfully"}
-@router.delete("/upload/{category}/{group_id}")
-def delete_file_upload(
-    category: str,
-    group_id: str,
-    db: Session = Depends(get_db)
-):
-    # ---------- validate category ----------
-    if category not in ["mcap_movers", "up_down_mobile", "up_down_trend"]:
-        raise HTTPException(
-            400, "Category must be 'mcap_movers', 'up_down_mobile', or 'up_down_trend'"
-        )
-
-    # ---------- select models ----------
-    if category == "mcap_movers":
-        UploadModel = McapGainersLosersUpload
-        DataModel = McapGainersLosers
-    elif category == "up_down_mobile":
-        UploadModel = Upward_DownwardMobileUpload
-        DataModel = Upward_DownwardMobile
-    else:  # up_down_trend
-        UploadModel = Up_DownTrendUpload
-        DataModel = Up_DownTrend
-
-    # ---------- fetch upload ----------
-    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
-    if not upload:
-        raise HTTPException(404, "Upload not found")
-
-    # ---------- delete associated data ----------
-    db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
-
-    # ---------- delete file ----------
-    if upload.file_path and os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
-
-    # ---------- delete upload record ----------
-    db.delete(upload)
     db.commit()
 
     return {"message": "Upload deleted successfully"}

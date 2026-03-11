@@ -1,45 +1,30 @@
+# app/routes/primerrymusings.py
 import uuid
-import shutil
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional
-
-from fastapi import (
-    APIRouter,
-    Depends,
-    UploadFile,
-    File,
-    Form,
-    HTTPException,
-)
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.primarymusings import PrimaryMusings
 from app.schemas.primarymusings import PrimaryMusingsResponse
-
+from app.s3_utils import (
+    upload_file_to_s3,
+    delete_file_from_s3,
+    get_s3_file_url
+)
 
 # -------------------------------------------------------------------
 # Router setup
 # -------------------------------------------------------------------
-
 router = APIRouter(
     prefix="/primerrymusings",
     tags=["PrimerryMusings"]
 )
 
 # -------------------------------------------------------------------
-# Upload configuration
-# -------------------------------------------------------------------
-
-UPLOAD_DIR = Path("uploads/PrimaryMusingss")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# -------------------------------------------------------------------
 # Database dependency
 # -------------------------------------------------------------------
-
 def get_db():
     db = SessionLocal()
     try:
@@ -47,26 +32,31 @@ def get_db():
     finally:
         db.close()
 
-
 # -------------------------------------------------------------------
-# File helpers
+# File helpers for S3
 # -------------------------------------------------------------------
+def save_file_to_s3(upload_file: UploadFile, folder: str) -> str:
+    """
+    Upload file to S3 and return S3 key
+    """
+    ext = upload_file.filename.split(".")[-1]
+    filename = f"{uuid.uuid4()}.{ext}"
+    s3_key = f"{folder}/{filename}"
 
-def save_file(upload_file: UploadFile) -> str:
-    ext = Path(upload_file.filename).suffix
-    filename = f"{uuid.uuid4()}{ext}"
-    file_path = UPLOAD_DIR / filename
+    upload_file.file.seek(0)
+    upload_file_to_s3(upload_file.file, s3_key)
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
+    return s3_key
 
-    return str(file_path)
-
-
-def delete_file(path: Optional[str]):
-    if path and Path(path).exists():
-        Path(path).unlink()
-
+def delete_file_from_s3_safe(s3_key: Optional[str]):
+    """
+    Safely delete file from S3
+    """
+    if s3_key:
+        try:
+            delete_file_from_s3(s3_key)
+        except Exception as e:
+            print(f"Error deleting {s3_key} from S3: {e}")
 
 # -------------------------------------------------------------------
 # Create PrimaryMusings
@@ -80,7 +70,6 @@ def create_PrimaryMusings(
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    # Create instance of the model
     primarymusings = PrimaryMusings(
         company=company,
         exchange=exchange,
@@ -88,37 +77,40 @@ def create_PrimaryMusings(
         created_at=datetime.now(timezone.utc)
     )
 
-    # Save files if provided
+    # Upload files to S3
     if logo:
-        primarymusings.logo_image = save_file(logo)
-
+        primarymusings.logo_image = save_file_to_s3(logo, folder="primerrymusings/logo")
     if pdf:
-        primarymusings.pdf_path = save_file(pdf)  # ⚠ Use the instance, not the class
+        primarymusings.pdf_path = save_file_to_s3(pdf, folder="primerrymusings/pdf")
 
-    # Add to DB
     db.add(primarymusings)
     db.commit()
     db.refresh(primarymusings)
+
+    # Convert S3 keys to presigned URLs for response
+    if primarymusings.logo_image:
+        primarymusings.logo_image = get_s3_file_url(primarymusings.logo_image)
+    if primarymusings.pdf_path:
+        primarymusings.pdf_path = get_s3_file_url(primarymusings.pdf_path)
 
     return primarymusings
 
 # -------------------------------------------------------------------
 # Get All PrimaryMusingss
 # -------------------------------------------------------------------
-
 @router.get("/", response_model=List[PrimaryMusingsResponse])
 def get_PrimaryMusingss(db: Session = Depends(get_db)):
-    return (
-        db.query(PrimaryMusings)
-        .order_by(PrimaryMusings.created_at.desc())
-        .all()
-    )
-
+    results = db.query(PrimaryMusings).order_by(PrimaryMusings.created_at.desc()).all()
+    for item in results:
+        if item.logo_image:
+            item.logo_image = get_s3_file_url(item.logo_image)
+        if item.pdf_path:
+            item.pdf_path = get_s3_file_url(item.pdf_path)
+    return results
 
 # -------------------------------------------------------------------
 # Update PrimaryMusings
 # -------------------------------------------------------------------
-
 @router.put("/{PrimaryMusings_id}", response_model=PrimaryMusingsResponse)
 def update_PrimaryMusings(
     PrimaryMusings_id: int,
@@ -129,36 +121,37 @@ def update_PrimaryMusings(
     pdf: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    # Use a different variable name for the instance
-    primarymusings_instance = db.query(PrimaryMusings).filter(
+    instance = db.query(PrimaryMusings).filter(
         PrimaryMusings.id == PrimaryMusings_id
     ).first()
 
-    if not primarymusings_instance:
-        raise HTTPException(
-            status_code=404,
-            detail="PrimaryMusings not found"
-        )
+    if not instance:
+        raise HTTPException(status_code=404, detail="PrimaryMusings not found")
 
-    # Update fields
-    primarymusings_instance.company = company
-    primarymusings_instance.exchange = exchange
-    primarymusings_instance.content = content
-    primarymusings_instance.created_at = datetime.now(timezone.utc)
+    instance.company = company
+    instance.exchange = exchange
+    instance.content = content
+    instance.created_at = datetime.now(timezone.utc)
 
-    # Handle file uploads
+    # Replace files in S3 if provided
     if logo:
-        delete_file(primarymusings_instance.logo_image)
-        primarymusings_instance.logo_image = save_file(logo)
-
+        delete_file_from_s3_safe(instance.logo_image)
+        instance.logo_image = save_file_to_s3(logo, folder="primerrymusings/logo")
     if pdf:
-        delete_file(primarymusings_instance.pdf_path)
-        primarymusings_instance.pdf_path = save_file(pdf)
+        delete_file_from_s3_safe(instance.pdf_path)
+        instance.pdf_path = save_file_to_s3(pdf, folder="primerrymusings/pdf")
 
     db.commit()
-    db.refresh(primarymusings_instance)
+    db.refresh(instance)
 
-    return primarymusings_instance
+    # Convert S3 keys to presigned URLs
+    if instance.logo_image:
+        instance.logo_image = get_s3_file_url(instance.logo_image)
+    if instance.pdf_path:
+        instance.pdf_path = get_s3_file_url(instance.pdf_path)
+
+    return instance
+
 # -------------------------------------------------------------------
 # Delete PrimaryMusings
 # -------------------------------------------------------------------
@@ -167,23 +160,22 @@ def delete_PrimaryMusings(
     PrimaryMusings_id: int,
     db: Session = Depends(get_db),
 ):
-    # Use a different variable name for the instance
-    primarymusings_instance = db.query(PrimaryMusings).filter(
+    """
+    Delete a PrimaryMusings record and associated files from S3.
+    """
+    instance = db.query(PrimaryMusings).filter(
         PrimaryMusings.id == PrimaryMusings_id
     ).first()
 
-    if not primarymusings_instance:
-        raise HTTPException(
-            status_code=404,
-            detail="PrimaryMusings not found"
-        )
+    if not instance:
+        raise HTTPException(status_code=404, detail="PrimaryMusings not found")
 
-    # Delete associated files
-    delete_file(primarymusings_instance.logo_image)
-    delete_file(primarymusings_instance.pdf_path)
+    # Delete files safely
+    delete_file_from_s3_safe(instance.logo_image)
+    delete_file_from_s3_safe(instance.pdf_path)
 
-    # Delete from database
-    db.delete(primarymusings_instance)
+    # Delete DB record
+    db.delete(instance)
     db.commit()
 
     return {"message": "PrimaryMusings deleted successfully"}

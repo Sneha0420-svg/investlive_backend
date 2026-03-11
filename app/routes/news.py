@@ -1,22 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
-from sqlalchemy.orm import Session
-import shutil
-import os
-from typing import List
+import io
 from datetime import datetime
-from fastapi.staticfiles import StaticFiles
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.news import News
 from app.schemas.news import NewsOut
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3, get_s3_file_url
 
 router = APIRouter(prefix="/news", tags=["News"])
 
-# Upload directory
-UPLOAD_DIR = "uploads/news"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# Dependency to get DB session
+# -------------------- DB DEPENDENCY --------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -24,26 +20,27 @@ def get_db():
     finally:
         db.close()
 
-# Mount uploads (ensure this is also in main.py)
-# app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# -------------------- HELPER --------------------
+def generate_s3_key(filename: str):
+    """
+    Create a unique S3 key in the 'news/' folder
+    """
+    return f"news/{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{filename}"
 
-# ---------------- CREATE NEWS ----------------
+# -------------------- CREATE NEWS --------------------
 @router.post("/", response_model=NewsOut)
-def create_news(
+async def create_news(
     source: str = Form(...),
     title: str = Form(None),
     content: str = Form(...),
     news_type: str = Form(...),
     image: UploadFile = File(None),
     db: Session = Depends(get_db),
-    request: Request = None,  # ✅ Must be after all defaults
 ):
-    image_path = None
+    image_s3_key = None
     if image:
-        file_location = os.path.join(UPLOAD_DIR, image.filename)
-        with open(file_location, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        image_path = file_location
+        file_bytes = await image.read()
+        image_s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(image.filename))
 
     db_news = News(
         source=source,
@@ -51,18 +48,12 @@ def create_news(
         content=content,
         news_type=news_type,
         news_date=datetime.utcnow(),
-        image_path=image_path,
+        image_path=image_s3_key
     )
 
     db.add(db_news)
     db.commit()
     db.refresh(db_news)
-
-    # Return image URL
-    image_url = (
-        f"{request.url.scheme}://{request.url.hostname}:{request.url.port}/uploads/news/{os.path.basename(image_path)}"
-        if image_path else None
-    )
 
     return {
         "id": db_news.id,
@@ -71,41 +62,32 @@ def create_news(
         "content": db_news.content,
         "news_type": db_news.news_type,
         "news_date": db_news.news_date,
-        "image_path": image_url,
+        "image_path": get_s3_file_url(db_news.image_path) if db_news.image_path else None
     }
 
-# ---------------- GET ALL NEWS ----------------
+# -------------------- GET ALL NEWS --------------------
 @router.get("/", response_model=List[NewsOut])
-def get_news(db: Session = Depends(get_db), request: Request = None):
+def get_news(db: Session = Depends(get_db)):
     news_list = db.query(News).order_by(News.news_date.desc()).all()
-    result = []
-    for n in news_list:
-        image_url = (
-            f"{request.url.scheme}://{request.url.hostname}:{request.url.port}/uploads/news/{os.path.basename(n.image_path)}"
-            if n.image_path else None
-        )
-        result.append({
+    return [
+        {
             "id": n.id,
             "source": n.source,
             "title": n.title,
             "content": n.content,
             "news_type": n.news_type,
             "news_date": n.news_date,
-            "image_path": image_url,
-        })
-    return result
+            "image_path": get_s3_file_url(n.image_path) if n.image_path else None
+        }
+        for n in news_list
+    ]
 
-# ---------------- GET SINGLE NEWS ----------------
+# -------------------- GET SINGLE NEWS --------------------
 @router.get("/{news_id}", response_model=NewsOut)
-def get_single_news(news_id: int, db: Session = Depends(get_db), request: Request = None):
+def get_single_news(news_id: int, db: Session = Depends(get_db)):
     news = db.query(News).filter(News.id == news_id).first()
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
-
-    image_url = (
-        f"{request.url.scheme}://{request.url.hostname}:{request.url.port}/uploads/news/{os.path.basename(news.image_path)}"
-        if news.image_path else None
-    )
 
     return {
         "id": news.id,
@@ -114,12 +96,12 @@ def get_single_news(news_id: int, db: Session = Depends(get_db), request: Reques
         "content": news.content,
         "news_type": news.news_type,
         "news_date": news.news_date,
-        "image_path": image_url,
+        "image_path": get_s3_file_url(news.image_path) if news.image_path else None
     }
 
-# ---------------- UPDATE NEWS ----------------
+# -------------------- UPDATE NEWS --------------------
 @router.put("/{news_id}", response_model=NewsOut)
-def update_news(
+async def update_news(
     news_id: int,
     source: str = Form(...),
     title: str = Form(None),
@@ -127,33 +109,27 @@ def update_news(
     news_type: str = Form(...),
     image: UploadFile = File(None),
     db: Session = Depends(get_db),
-    request: Request = None,
 ):
     news = db.query(News).filter(News.id == news_id).first()
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
 
-    # Update image if provided
+    # Replace image if provided
     if image:
-        file_location = os.path.join(UPLOAD_DIR, image.filename)
-        with open(file_location, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        news.image_path = file_location
+        if news.image_path:
+            delete_file_from_s3(news.image_path)
+        file_bytes = await image.read()
+        news.image_path = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(image.filename))
 
     # Update other fields
     news.source = source
     news.title = title
     news.content = content
     news.news_type = news_type
-    news.news_date = datetime.utcnow()  # always update timestamp
+    news.news_date = datetime.utcnow()
 
     db.commit()
     db.refresh(news)
-
-    image_url = (
-        f"{request.url.scheme}://{request.url.hostname}:{request.url.port}/uploads/news/{os.path.basename(news.image_path)}"
-        if news.image_path else None
-    )
 
     return {
         "id": news.id,
@@ -162,17 +138,33 @@ def update_news(
         "content": news.content,
         "news_type": news.news_type,
         "news_date": news.news_date,
-        "image_path": image_url,
+        "image_path": get_s3_file_url(news.image_path) if news.image_path else None
     }
 
-# ---------------- DELETE NEWS ----------------
+# -------------------- DELETE NEWS --------------------
 @router.delete("/{news_id}")
 def delete_news(news_id: int, db: Session = Depends(get_db)):
     news = db.query(News).filter(News.id == news_id).first()
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
-    if news.image_path and os.path.exists(news.image_path):
-        os.remove(news.image_path)
+
+    if news.image_path:
+        delete_file_from_s3(news.image_path)
+
     db.delete(news)
     db.commit()
     return {"detail": "News deleted successfully"}
+
+# -------------------- DOWNLOAD IMAGE --------------------
+@router.get("/image/{news_id}")
+def download_news_image(news_id: int, db: Session = Depends(get_db)):
+    news = db.query(News).filter(News.id == news_id).first()
+    if not news or not news.image_path:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    file_stream = get_file_stream_from_s3(news.image_path)
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{news.id}.jpg"'}
+    )

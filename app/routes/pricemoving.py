@@ -1,14 +1,14 @@
 # app/routes/pricemoving.py
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
-from datetime import date, timedelta
+from sqlalchemy import func
+from datetime import date, timedelta, datetime
 import csv
-from io import StringIO
+import io
 
 from app.models.pricemoving import PriceMoving
 from app.database import SessionLocal
-from datetime import datetime
-
+from app.s3_utils import upload_file_to_s3, get_s3_file_url  # S3 helper functions
 
 router = APIRouter(prefix="/pricemoving", tags=["PriceMoving"])
 
@@ -21,17 +21,24 @@ def get_db():
         yield db
     finally:
         db.close()
+
 # ----------------------
-# Upload CSV Data (No headers)
+# Upload CSV Data (No headers) -> S3
 # Replace record if same ISIN + TRN_DATE exists
 # ----------------------
 @router.post("/upload")
-def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
 
-    content = file.file.read().decode("utf-8").splitlines()
-    reader = csv.reader(content)
+    content = await file.read()
+
+    # Upload CSV to S3 under separate folder "price_moving"
+    s3_key = upload_file_to_s3(io.BytesIO(content), folder="price_moving")
+    s3_url = get_s3_file_url(s3_key)
+
+    content_str = content.decode("utf-8").splitlines()
+    reader = csv.reader(content_str)
 
     records_added = 0
     records_updated = 0
@@ -39,12 +46,10 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     for row in reader:
         if len(row) != 10:
             continue  # skip invalid rows
-
         try:
             trn_date = datetime.strptime(row[9].strip(), "%Y-%m-%d").date()
             isin = row[3].strip()
 
-            # 🔎 Check if record already exists
             existing = (
                 db.query(PriceMoving)
                 .filter(PriceMoving.ISIN == isin)
@@ -53,7 +58,7 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
             )
 
             if existing:
-                # ✅ Update existing record
+                # Update existing record
                 existing.SCCODE = row[0].strip()
                 existing.SCRIP = row[1].strip()
                 existing.COCODE = row[2].strip()
@@ -62,10 +67,9 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
                 existing.DMA_21 = float(row[6])
                 existing.DMA_60 = float(row[7])
                 existing.DMA_245 = float(row[8])
-
                 records_updated += 1
             else:
-                # ✅ Insert new record
+                # Insert new record
                 pm = PriceMoving(
                     SCCODE=row[0].strip(),
                     SCRIP=row[1].strip(),
@@ -90,8 +94,10 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return {
         "message": "Upload completed",
         "records_inserted": records_added,
-        "records_updated": records_updated
+        "records_updated": records_updated,
+        "file_url": s3_url
     }
+
 # ----------------------
 # Get last 2 years data for a specific ISIN
 # ----------------------
@@ -118,6 +124,7 @@ def get_graph_data_by_isin(isin: str, db: Session = Depends(get_db)):
         "DMA_60": [float(d.DMA_60) for d in data],
         "DMA_245": [float(d.DMA_245) for d in data],
     }
+
 # ----------------------
 # Get all SCCODEs
 # ----------------------
@@ -125,15 +132,12 @@ def get_graph_data_by_isin(isin: str, db: Session = Depends(get_db)):
 def get_sccodes(db: Session = Depends(get_db)):
     sccodes = db.query(PriceMoving.SCCODE, PriceMoving.SCRIP).distinct().all()
     return [{"SCCODE": s[0], "SCRIP": s[1]} for s in sccodes]
+
 # ----------------------
 # Get All PriceMoving Data (with pagination)
 # ----------------------
 @router.get("/all")
-def get_all_data(
-    limit: int = 1000,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
+def get_all_data(limit: int = 1000, offset: int = 0, db: Session = Depends(get_db)):
     data = (
         db.query(PriceMoving)
         .order_by(PriceMoving.TRN_DATE.desc())
@@ -161,47 +165,33 @@ def get_all_data(
         }
         for d in data
     ]
-    
+
 # ----------------------
 # Delete PriceMoving records for a specific TRN_DATE
 # ----------------------
-from fastapi import Query
-
 @router.delete("/delete")
 def delete_by_trn_date(trn_date: str = Query(..., description="Date of the upload to delete"), db: Session = Depends(get_db)):
-    """
-    Delete all PriceMoving records for a specific TRN_DATE (YYYY-MM-DD)
-    """
     try:
         date_obj = datetime.strptime(trn_date, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-    # Check if data exists
     existing = db.query(PriceMoving).filter(PriceMoving.TRN_DATE == date_obj).all()
     if not existing:
         raise HTTPException(status_code=404, detail="No records found for this date")
 
-    # Delete records
     deleted_count = db.query(PriceMoving).filter(PriceMoving.TRN_DATE == date_obj).delete(synchronize_session=False)
     db.commit()
 
     return {
         "message": f"Deleted {deleted_count} records for TRN_DATE {trn_date}"
     }
-    
+
 # ----------------------
 # Get All Upload Dates (Grouped by TRN_DATE)
 # ----------------------
-from sqlalchemy import func
-
 @router.get("/uploads")
 def get_all_uploads(db: Session = Depends(get_db)):
-    """
-    Returns all unique TRN_DATE values (each upload batch)
-    with record count for that date.
-    """
-
     uploads = (
         db.query(
             PriceMoving.TRN_DATE,

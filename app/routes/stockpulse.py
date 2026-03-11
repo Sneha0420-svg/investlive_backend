@@ -1,23 +1,20 @@
 # app/routers/stockpulse.py
-import os
 from uuid import uuid4
 from datetime import date
-from typing import List,Optional
+from typing import List, Optional
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+
 from app.database import SessionLocal
 from app.models.stockpulse import StockPulseData, StockPulseUpload
 from app.schemas.stockpulse import StockPulseUploadSchema, StockPulseLatestResponse
-
-UPLOAD_DIR = "uploads/stockpulse"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
 
 router = APIRouter(prefix="/stockpulse", tags=["StockPulse"])
-
 
 # -------------------- DB DEP --------------------
 def get_db():
@@ -29,16 +26,18 @@ def get_db():
 
 
 # -------------------- FILE READER --------------------
-def read_stockpulse_file(path: str) -> pd.DataFrame:
-    if path.lower().endswith(".csv"):
-        return pd.read_csv(path, header=None)
-    elif path.lower().endswith((".xls", ".xlsx")):
-        return pd.read_excel(path, header=None)
-    else:
-        raise HTTPException(400, "Only CSV, XLS, XLSX supported")
+def read_stockpulse_file(file_obj) -> pd.DataFrame:
+    """Read CSV or Excel file from file-like object."""
+    try:
+        return pd.read_csv(file_obj, header=None)
+    except Exception:
+        try:
+            return pd.read_excel(file_obj, header=None)
+        except Exception:
+            raise HTTPException(400, "Only CSV, XLS, XLSX supported")
 
 
-# -------------------- UPLOAD EXCEL --------------------
+# -------------------- UPLOAD --------------------
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -51,41 +50,30 @@ async def upload_multiple_data(
     upload_ids = []
 
     for file in files:
-        filename = f"{date.today()}_{uuid4()}_{file.filename}"
-        file_path = os.path.join(UPLOAD_DIR, filename)
-
-        # Save file
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        # Upload to S3
+        s3_key = upload_file_to_s3(file.file, f"stockpulse/{uuid4()}_{file.filename}")
 
         # Save upload metadata
         upload_record = StockPulseUpload(
             upload_date=upload_date,
             data_date=data_date,
             data_type=data_type,
-            file_name=filename,
-            file_path=file_path
+            file_name=file.filename,
+            file_path=s3_key
         )
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
         upload_ids.append(upload_record.id)
 
-        # Read file (NO HEADER)
-        try:
-            df = read_stockpulse_file(file_path)
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file: {e}")
+        # Read file from S3
+        s3_file = get_file_stream_from_s3(s3_key)
+        df = read_stockpulse_file(s3_file)
 
-        # Drop 32nd column (index 31)
+        # Drop unwanted column
         df = df.drop(df.columns[31], axis=1)
-
-        # Validate column count
         if df.shape[1] != 32:
-            raise HTTPException(
-                400,
-                f"Excel must have exactly 32 columns after cleanup, found {df.shape[1]}"
-            )
+            raise HTTPException(400, "Excel must have exactly 32 columns after cleanup")
 
         # Assign column names
         df.columns = [
@@ -103,18 +91,15 @@ async def upload_multiple_data(
             "myrul", "myruldt",
             "pulse_score"
         ]
-
-        # Replace NaN / 'nan' with None
         df = df.replace({np.nan: None, "nan": None, "NaN": None})
 
-        # Date columns cleanup
+        # Convert date columns
         date_cols = [
             "wkhdt_52", "wkldt_52",
             "wkhvdt_52", "wklvdt_52",
             "myrhdt", "myrldt",
             "myruhdt", "myruldt"
         ]
-
         for col in date_cols:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
         df[date_cols] = df[date_cols].where(df[date_cols].notna(), None)
@@ -161,11 +146,9 @@ async def upload_multiple_data(
                 )
             )
 
-    if not all_records:
-        raise HTTPException(400, "No valid data found")
-
-    db.bulk_save_objects(all_records)
-    db.commit()
+    if all_records:
+        db.bulk_save_objects(all_records)
+        db.commit()
 
     return {
         "message": "Files uploaded successfully",
@@ -175,14 +158,10 @@ async def upload_multiple_data(
 
 
 
-
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads", response_model=List[StockPulseUploadSchema])
 def list_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(StockPulseUpload).order_by(
-        desc(StockPulseUpload.upload_date)
-    ).all()
-
+    uploads = db.query(StockPulseUpload).order_by(desc(StockPulseUpload.upload_date)).all()
     return [
         {
             "id": u.id,
@@ -195,18 +174,22 @@ def list_uploads(db: Session = Depends(get_db)):
         for u in uploads
     ]
 
-
 # -------------------- DOWNLOAD --------------------
 @router.get("/files/{upload_id}")
 def download(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(StockPulseUpload).filter(
-        StockPulseUpload.id == upload_id
-    ).first()
-
-    if not upload or not os.path.exists(upload.file_path):
+    upload = db.query(StockPulseUpload).filter(StockPulseUpload.id == upload_id).first()
+    if not upload or not upload.file_path:
         raise HTTPException(404, "File not found")
 
-    return FileResponse(upload.file_path, filename=upload.file_name)
+    s3_file = get_file_stream_from_s3(upload.file_path)
+    if not s3_file:
+        raise HTTPException(404, "File not found in S3")
+
+    return StreamingResponse(
+        s3_file,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
+    )
 
 
 # -------------------- LATEST DATA --------------------
@@ -251,28 +234,24 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
         "type": record.type,
         "records": [stock_dict]
     }
-
 @router.put("/upload/{upload_id}")
 async def update_stockpulse_upload(
     upload_id: int,
-    files: Optional[List[UploadFile]] = File(None),  # ✅ optional now
-    upload_date: date = Form(...),
-    data_date: date = Form(...),
-    data_type: str = Form(...),
+    files: Optional[List[UploadFile]] = File(None),  # optional new files
+    upload_date: Optional[date] = Form(None),
+    data_date: Optional[date] = Form(None),
+    data_type: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    # 1️⃣ Fetch the existing upload
-    upload = db.query(StockPulseUpload).filter(
-        StockPulseUpload.id == upload_id
-    ).first()
-
+    # 1️⃣ Fetch existing upload
+    upload = db.query(StockPulseUpload).filter(StockPulseUpload.id == upload_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
     # 2️⃣ Delete old data rows for this upload
     db.query(StockPulseData).filter(
         StockPulseData.data_date == upload.data_date,
-        StockPulseData.type == upload.data_type,
+        StockPulseData.type == upload.data_type
     ).delete(synchronize_session=False)
 
     all_records = []
@@ -295,22 +274,21 @@ async def update_stockpulse_upload(
         "pulse_score"
     ]
 
-    # 3️⃣ Process new files if any
+    # 3️⃣ Process new files if provided
     if files:
-        # Delete old file only if replacing
-        if os.path.exists(upload.file_path):
-            os.remove(upload.file_path)
-
         for file in files:
-            filename = f"{date.today()}_{uuid4()}_{file.filename}"
-            file_path = os.path.join(UPLOAD_DIR, filename)
+            # Delete old S3 file if replacing
+            if upload.file_path:
+                delete_file_from_s3(upload.file_path)
 
-            # Save uploaded file
-            with open(file_path, "wb") as f:
-                f.write(await file.read())
+            # Upload new file to S3
+            s3_key = upload_file_to_s3(file.file, f"stockpulse/{uuid4()}_{file.filename}")
+            upload.file_name = file.filename
+            upload.file_path = s3_key
 
-            # Read file
-            df = read_stockpulse_file(file_path)
+            # Read file directly from S3
+            s3_file = get_file_stream_from_s3(s3_key)
+            df = read_stockpulse_file(s3_file)
 
             # Drop unwanted column and validate
             df = df.drop(df.columns[31], axis=1)
@@ -347,7 +325,7 @@ async def update_stockpulse_upload(
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             df[numeric_cols] = df[numeric_cols].where(df[numeric_cols].notna(), None)
 
-            # Insert rows
+            # Prepare DB records
             for _, row in df.iterrows():
                 all_records.append(
                     StockPulseData(
@@ -383,22 +361,21 @@ async def update_stockpulse_upload(
                         myrul=row["myrul"],
                         myruldt=row["myruldt"],
                         pulse_score=row["pulse_score"],
-                        type=data_type,
-                        upload_date=upload_date,
-                        data_date=data_date
+                        type=data_type or upload.type,
+                        upload_date=upload_date or upload.upload_date,
+                        data_date=data_date or upload.data_date
                     )
                 )
 
-        # Update upload metadata if file replaced
-        upload.file_name = filename
-        upload.file_path = file_path
-
     # 4️⃣ Update metadata even if no new file
-    upload.upload_date = upload_date
-    upload.data_date = data_date
-    upload.data_type = data_type
+    if upload_date:
+        upload.upload_date = upload_date
+    if data_date:
+        upload.data_date = data_date
+    if data_type:
+        upload.type = data_type
 
-    # 5️⃣ Save to DB
+    # 5️⃣ Save new records if any
     if all_records:
         db.bulk_save_objects(all_records)
 
@@ -409,24 +386,22 @@ async def update_stockpulse_upload(
         "upload_id": upload.id,
         "records_inserted": len(all_records)
     }
-
 # -------------------- DELETE --------------------
 @router.delete("/uploads/{upload_id}")
 def delete_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(StockPulseUpload).filter(
-        StockPulseUpload.id == upload_id
-    ).first()
-
+    upload = db.query(StockPulseUpload).filter(StockPulseUpload.id == upload_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Delete data rows
     db.query(StockPulseData).filter(
         StockPulseData.data_date == upload.data_date,
-        StockPulseData.type == upload.data_type,
+        StockPulseData.type == upload.data_type
     ).delete(synchronize_session=False)
 
-    if os.path.exists(upload.file_path):
-        os.remove(upload.file_path)
+    # Delete file from S3
+    if upload.file_path:
+        delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()
