@@ -8,7 +8,6 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
-
 from app.database import SessionLocal
 from app.models.newhighlow import (
     FiftyTwoWeekHighLow,
