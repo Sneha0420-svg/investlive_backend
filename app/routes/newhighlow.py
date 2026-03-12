@@ -7,6 +7,7 @@ import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert
 
 from app.database import SessionLocal
 from app.models.newhighlow import (
@@ -92,6 +93,9 @@ async def upload_new_high_low(
     # Read file
     df = read_file_bytes(file_bytes, expected_cols, columns, category)
 
+    # Remove duplicates in the uploaded file itself
+    df = df.drop_duplicates(subset=["ISIN"])
+
     # Store upload info
     upload_row = UploadModel(
         group_id=group_id,
@@ -102,64 +106,71 @@ async def upload_new_high_low(
         file_path=s3_key
     )
     db.add(upload_row)
+    db.commit()  # commit to generate upload_row.id if needed
 
-    # Insert data only if latest
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest_upload or data_date >= latest_upload.data_date:
-        db.query(DataModel).delete(synchronize_session=False)
-        records = []
-        for _, row in df.iterrows():
-            if category == "52-week":
-                records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    CMP=clean_nan(row["CMP"]),
-                    WKH_52=clean_nan(row["52WKH"]),
-                    WKL_52=clean_nan(row["52WKL"]),
-                    CH_RS=clean_nan(row["CH_RS"]),
-                    CH_PER=clean_nan(row["CH_PER"]),
-                    group_id=group_id
-                ))
-            elif category == "circuit":
-                records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    CMP=clean_nan(row["CMP"]),
-                    CH_PER=clean_nan(row["CH_PER"]),
-                    VOL=row["VOL"],
-                    VALUE=row["VALUE"],
-                    TRADE=row["TRADE"],
-                    WKH_52=clean_nan(row["52WKH"]),
-                    WKH_DT_52=str(row["52WKHDT"]),
-                    WKL_52=clean_nan(row["52WKL"]),
-                    WKL_DT_52=str(row["52WKLDT"]),
-                    group_id=group_id
-                ))
-            else:  # multi-year
-                records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    MCAP=clean_nan(row["MCAP"]),
-                    CMP=clean_nan(row["CMP"]),
-                    MYRH=clean_nan(row["MYRH"]),
-                    MYRH_DT=str(row["MYRH_DT"]),
-                    MYRL=clean_nan(row["MYRL"]),
-                    MYRL_DT=str(row["MYRL_DT"]),
-                    SINCE=str(row["SINCE"]),
-                    TYPE=int(row["TYPE"]),
-                    ID=int(row["ID"]),
-                    group_id=group_id
-                ))
-        db.bulk_save_objects(records)
+    # Clear existing records with same data_date or category
+    db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
+    
+    # Prepare new records
+    records = []
+    for _, row in df.iterrows():
+        if category == "52-week":
+            records.append(DataModel(
+                COMPANY=clean_nan(row["COMPANY"]),
+                ISIN=row["ISIN"],
+                CMP=clean_nan(row["CMP"]),
+                WKH_52=clean_nan(row["52WKH"]),
+                WKL_52=clean_nan(row["52WKL"]),
+                CH_RS=clean_nan(row["CH_RS"]),
+                CH_PER=clean_nan(row["CH_PER"]),
+                group_id=group_id
+            ))
+        elif category == "circuit":
+            records.append(DataModel(
+                COMPANY=clean_nan(row["COMPANY"]),
+                ISIN=row["ISIN"],
+                CMP=clean_nan(row["CMP"]),
+                CH_PER=clean_nan(row["CH_PER"]),
+                VOL=row["VOL"],
+                VALUE=row["VALUE"],
+                TRADE=row["TRADE"],
+                WKH_52=clean_nan(row["52WKH"]),
+                WKH_DT_52=str(row["52WKHDT"]),
+                WKL_52=clean_nan(row["52WKL"]),
+                WKL_DT_52=str(row["52WKLDT"]),
+                group_id=group_id
+            ))
+        else:
+            records.append(DataModel(
+                COMPANY=clean_nan(row["COMPANY"]),
+                ISIN=row["ISIN"],
+                MCAP=clean_nan(row["MCAP"]),
+                CMP=clean_nan(row["CMP"]),
+                MYRH=clean_nan(row["MYRH"]),
+                MYRH_DT=str(row["MYRH_DT"]),
+                MYRL=clean_nan(row["MYRL"]),
+                MYRL_DT=str(row["MYRL_DT"]),
+                SINCE=str(row["SINCE"]),
+                TYPE=int(row["TYPE"]),
+                ID=int(row["ID"]),
+                group_id=group_id
+            ))
 
-    db.commit()
+    # Bulk save records safely
+    if records:
+        try:
+            db.bulk_save_objects(records)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(500, f"Failed to insert records: {str(e)}")
+
     return {
         "message": f"{category} data uploaded successfully",
         "group_id": group_id,
         "records": len(df),
         "file_s3_url": get_s3_file_url(s3_key)
     }
-
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads/{category}")
 def get_new_high_low_uploads(category: str, db: Session = Depends(get_db)):
@@ -215,77 +226,93 @@ async def update_new_high_low_upload(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, expected_cols, columns = get_models(category)
+    
+    # Fetch existing upload
     upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Update metadata
     if upload_date:
         upload.upload_date = upload_date
     if data_date:
         upload.data_date = data_date
 
-    new_records = []
+    # If new file is provided
     if file:
-        # delete old S3 file
+        # Delete old S3 file
         if upload.file_path:
             delete_file_from_s3(upload.file_path)
 
-        # upload new file
+        # Upload new file
         file_bytes = await file.read()
         s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(category, file.filename))
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # delete old data
-        db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
-
-        # read new data
+        # Read new data
         df = read_file_bytes(file_bytes, expected_cols, columns, category)
+        df = df.drop_duplicates(subset=["ISIN"])  # Drop duplicates in file
 
+        # Prepare upsert records
+        records = []
         for _, row in df.iterrows():
             if category == "52-week":
-                new_records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    CMP=clean_nan(row["CMP"]),
-                    WKH_52=clean_nan(row["52WKH"]),
-                    WKL_52=clean_nan(row["52WKL"]),
-                    CH_RS=clean_nan(row["CH_RS"]),
-                    CH_PER=clean_nan(row["CH_PER"]),
-                    group_id=group_id
-                ))
+                records.append({
+                    "COMPANY": clean_nan(row["COMPANY"]),
+                    "ISIN": row["ISIN"],
+                    "CMP": clean_nan(row["CMP"]),
+                    "WKH_52": clean_nan(row["52WKH"]),
+                    "WKL_52": clean_nan(row["52WKL"]),
+                    "CH_RS": clean_nan(row["CH_RS"]),
+                    "CH_PER": clean_nan(row["CH_PER"]),
+                    "group_id": group_id
+                })
             elif category == "circuit":
-                new_records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    CMP=clean_nan(row["CMP"]),
-                    CH_PER=clean_nan(row["CH_PER"]),
-                    VOL=row["VOL"],
-                    VALUE=row["VALUE"],
-                    TRADE=row["TRADE"],
-                    WKH_52=clean_nan(row["52WKH"]),
-                    WKH_DT_52=str(row["52WKHDT"]),
-                    WKL_52=clean_nan(row["52WKL"]),
-                    WKL_DT_52=str(row["52WKLDT"]),
-                    group_id=group_id
-                ))
-            else:
-                new_records.append(DataModel(
-                    COMPANY=clean_nan(row["COMPANY"]),
-                    ISIN=row["ISIN"],
-                    MCAP=clean_nan(row["MCAP"]),
-                    CMP=clean_nan(row["CMP"]),
-                    MYRH=clean_nan(row["MYRH"]),
-                    MYRH_DT=str(row["MYRH_DT"]),
-                    MYRL=clean_nan(row["MYRL"]),
-                    MYRL_DT=str(row["MYRL_DT"]),
-                    SINCE=str(row["SINCE"]),
-                    TYPE=int(row["TYPE"]),
-                    ID=int(row["ID"]),
-                    group_id=group_id
-                ))
-        if new_records:
-            db.bulk_save_objects(new_records)
+                records.append({
+                    "COMPANY": clean_nan(row["COMPANY"]),
+                    "ISIN": row["ISIN"],
+                    "CMP": clean_nan(row["CMP"]),
+                    "CH_PER": clean_nan(row["CH_PER"]),
+                    "VOL": row["VOL"],
+                    "VALUE": row["VALUE"],
+                    "TRADE": row["TRADE"],
+                    "WKH_52": clean_nan(row["52WKH"]),
+                    "WKH_DT_52": str(row["52WKHDT"]),
+                    "WKL_52": clean_nan(row["52WKL"]),
+                    "WKL_DT_52": str(row["52WKLDT"]),
+                    "group_id": group_id
+                })
+            else:  # multi-year
+                records.append({
+                    "COMPANY": clean_nan(row["COMPANY"]),
+                    "ISIN": row["ISIN"],
+                    "MCAP": clean_nan(row["MCAP"]),
+                    "CMP": clean_nan(row["CMP"]),
+                    "MYRH": clean_nan(row["MYRH"]),
+                    "MYRH_DT": str(row["MYRH_DT"]),
+                    "MYRL": clean_nan(row["MYRL"]),
+                    "MYRL_DT": str(row["MYRL_DT"]),
+                    "SINCE": str(row["SINCE"]),
+                    "TYPE": int(row["TYPE"]),
+                    "ID": int(row["ID"]),
+                    "group_id": group_id
+                })
+
+        # Perform upsert
+        if records:
+            stmt = insert(DataModel).values(records)
+            primary_key_col = "ISIN"
+            update_cols = {c.name: c for c in stmt.excluded if c.name != primary_key_col}
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[primary_key_col],
+                set_=update_cols
+            )
+            try:
+                db.execute(stmt)
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(500, f"Failed to update records: {str(e)}")
 
     db.commit()
     return {"message": "Upload updated successfully", "group_id": group_id}
