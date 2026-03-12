@@ -30,7 +30,10 @@ from fastapi.staticfiles import StaticFiles
 import os
 app = FastAPI(
     title="Investlive API's",
-    version="1.0.0"
+    version="1.0.0",
+      docs_url="/api/docs",       # Swagger UI
+    redoc_url="/api/redoc",     # ReDoc
+    openapi_url="/api/openapi.json"  # OpenAPI schema
 )
 os.makedirs("uploads/news", exist_ok=True)
 
