@@ -8,6 +8,7 @@ import io
 import math
 from fastapi.responses import StreamingResponse
 from mimetypes import guess_type
+
 from app.models.marketind import StockData, MarketIndicatorUpload
 from app.database import SessionLocal
 from app.s3_utils import (
@@ -16,7 +17,7 @@ from app.s3_utils import (
     get_file_stream_from_s3
 )
 
-router = APIRouter(tags=["Market Indicator"])
+router = APIRouter(prefix="/marketindicator", tags=["Market Indicator"])
 
 # ---------------- DB Session ----------------
 def get_db():
@@ -46,7 +47,7 @@ def safe_float(value, default=0.0):
         return default
 
 
-def is_header_row(stock: StockData) -> bool:
+def is_header_row(stock: StockData):
     numeric_fields = [stock.yr_ago, stock.curnt, stock.ch, stock.S_ID, stock.IDX_ID]
     return all(f is None or f == 0 for f in numeric_fields)
 
@@ -54,54 +55,102 @@ def is_header_row(stock: StockData) -> bool:
 # ======================================================
 # Upload Multiple Files
 # ======================================================
-@router.post("/marketindicator/upload/")
+@router.post("/upload/")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
     mkt_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
+
     if not files:
-        raise HTTPException(400, "No files provided")
+        raise HTTPException(status_code=400, detail="No files provided")
 
     all_inserted = []
 
-    # Delete existing records for the same date
-    deleted_count = db.query(StockData).filter(StockData.mkt_date == mkt_date).delete()
+    # delete existing data for same date
+    deleted_rows = db.query(StockData).filter(
+        StockData.mkt_date == mkt_date
+    ).delete()
+
     db.commit()
 
     for file in files:
+
+        if not file.filename:
+            raise HTTPException(400, "Invalid file")
+
+        if not file.filename.endswith((".xlsx", ".xls", ".csv")):
+            raise HTTPException(
+                400,
+                f"{file.filename} unsupported format. Use xlsx/xls/csv"
+            )
+
         contents = await file.read()
 
-        # Upload to S3
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "market_indicator")
+        if not contents:
+            raise HTTPException(400, f"{file.filename} is empty")
+
+        # ---------------- Upload to S3 ----------------
+        try:
+            s3_key = upload_file_to_s3(
+                io.BytesIO(contents),
+                "market_indicator"
+            )
+        except Exception as e:
+            raise HTTPException(500, f"S3 upload failed: {str(e)}")
 
         upload_record = MarketIndicatorUpload(
             mkt_date=mkt_date,
             file_name=file.filename,
             file_path=s3_key
         )
+
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
 
-        # Read DataFrame
+        # ---------------- Read DataFrame ----------------
         try:
+
             if file.filename.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(io.BytesIO(contents), header=None)
-            elif file.filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
+
             else:
-                raise HTTPException(400, f"Unsupported file type: {file.filename}")
+                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
+
         except Exception as e:
-            raise HTTPException(400, f"Failed to read {file.filename}: {e}")
+            raise HTTPException(
+                400,
+                f"Failed reading {file.filename}: {str(e)}"
+            )
 
+        # validate column count
         if df.shape[1] < 9:
-            raise HTTPException(400, f"{file.filename} must have at least 9 columns")
+            raise HTTPException(
+                400,
+                f"{file.filename} must contain minimum 9 columns"
+            )
 
-        df.columns = ["name","yr_ago","curnt","ch","H_ID","S_ID","IDX_ID","flag","ID"]
+        df = df.iloc[:, :9]
 
-        records = [
-            StockData(
+        df.columns = [
+            "name",
+            "yr_ago",
+            "curnt",
+            "ch",
+            "H_ID",
+            "S_ID",
+            "IDX_ID",
+            "flag",
+            "ID"
+        ]
+
+        # ---------------- Convert to DB objects ----------------
+        records = []
+
+        for _, row in df.iterrows():
+
+            record = StockData(
                 name=str(row["name"]).strip() if row["name"] else "",
                 yr_ago=safe_float(row["yr_ago"]),
                 curnt=safe_float(row["curnt"]),
@@ -113,8 +162,9 @@ async def upload_multiple_data(
                 ID=safe_int(row["ID"]),
                 mkt_date=mkt_date
             )
-            for _, row in df.iterrows()
-        ]
+
+            records.append(record)
+
         db.bulk_save_objects(records)
         db.commit()
 
@@ -125,7 +175,8 @@ async def upload_multiple_data(
         })
 
     return {
-        "message": f"{len(files)} files uploaded. Existing rows deleted: {deleted_count}",
+        "message": f"{len(files)} files uploaded successfully",
+        "deleted_old_rows": deleted_rows,
         "details": all_inserted
     }
 
@@ -133,18 +184,22 @@ async def upload_multiple_data(
 # ======================================================
 # Get All Uploads
 # ======================================================
-@router.get("/marketindicator/uploads/")
+@router.get("/uploads/")
 def get_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(MarketIndicatorUpload).order_by(MarketIndicatorUpload.mkt_date.desc()).all()
+
+    uploads = db.query(MarketIndicatorUpload).order_by(
+        MarketIndicatorUpload.mkt_date.desc()
+    ).all()
+
     return [
         {
             "id": u.id,
             "file_name": u.file_name,
-            "file_path": ("/" + u.file_path.replace("\\", "/")) if u.file_path else None,
+            "file_path": u.file_path,
             "mkt_date": u.mkt_date
-        } for u in uploads
+        }
+        for u in uploads
     ]
-
 
 # ======================================================
 # Download File
