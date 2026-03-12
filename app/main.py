@@ -31,9 +31,10 @@ import os
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-      docs_url="/api/docs",       # Swagger UI
-    redoc_url="/api/redoc",     # ReDoc
-    openapi_url="/api/openapi.json"  # OpenAPI schema
+     docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    root_path="/api"   # add this
 )
 os.makedirs("uploads/news", exist_ok=True)
 
@@ -41,7 +42,7 @@ os.makedirs("uploads/news", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Allow CORS
 origins = [
-    "http://localhost:3000",  # your React frontend
+    "http://localhost:3000","http://3.111.78.143" ,"http://investlive.net" # your React frontend
     # You can add other domains here if needed
 ]
 
