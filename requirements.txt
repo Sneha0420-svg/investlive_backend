@@ -9,4 +9,3 @@ python-dotenv==1.0.1
 python-multipart==0.0.9
 bcrypt==3.2.0
 passlib==1.7.4
-boto3==1.26.230
