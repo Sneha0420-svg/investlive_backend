@@ -76,7 +76,7 @@ def read_csv_safe(file_stream, expected_columns=None):
         df = pd.read_csv(file_stream, header=None, encoding="utf-8")
     except UnicodeDecodeError:
         file_stream.seek(0)
-        df = pd.read_csv(file_stream, header=None, encoding="latin1", errors="replace")
+        df = pd.read_csv(file_stream, header=None, encoding="latin1")
     except pd.errors.EmptyDataError:
         raise HTTPException(status_code=404, detail="CSV file contains no data")
 

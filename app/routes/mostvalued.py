@@ -35,97 +35,77 @@ def get_db():
 
 # -------------------- UPLOAD FILES --------------------
 @router.post("/upload")
-async def upload_multiple_data(
-    housefile: List[UploadFile] = File(...),
-    stockfile: List[UploadFile] = File(...),
-    name1: List[str] = Form(...),
-    name2: List[str] = Form(...),
+async def upload_data(
+    file: UploadFile = File(...),
+    name: str = Form(...),
     upload_date: date = Form(...),
     data_date: date = Form(...),
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    # Ensure 1:1 mapping
-    if len(housefile) != len(name1) or len(stockfile) != len(name2):
-        raise HTTPException(400, "Each file must have a corresponding name")
+    contents = await file.read()
 
-    all_records = []
-    upload_ids = []
+    # Upload file to S3
+    s3_key = upload_file_to_s3(io.BytesIO(contents), "mostvalued")
 
-    # Helper to process files
-    async def process_file(file: UploadFile, name: str):
-        contents = await file.read()
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "mostvalued")
+    upload_record = MostValuedupload(
+        name=name,
+        upload_date=upload_date,
+        data_date=data_date,
+        data_type=data_type,
+        file_name=file.filename,
+        file_path=s3_key
+    )
 
-        upload_record = MostValuedupload(
+    db.add(upload_record)
+    db.commit()
+    db.refresh(upload_record)
+
+    # Read file
+    try:
+        if file.filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(contents), header=None)
+        elif file.filename.endswith(".csv"):
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
+        else:
+            raise HTTPException(400, "Invalid file type")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to read file: {e}")
+
+    if df.shape[1] != 8:
+        raise HTTPException(
+            400,
+            "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
+        )
+
+    df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
+
+    records = [
+        Mostvalued(
             name=name,
+            company=row["company"],
+            day=float(row["day"]),
+            week=float(row["week"]),
+            month=float(row["month"]),
+            quarter=float(row["quarter"]),
+            halfyear=float(row["halfyear"]),
+            year=float(row["year"]),
+            threeyear=float(row["threeyear"]),
             upload_date=upload_date,
             data_date=data_date,
-            data_type=data_type,
-            file_name=file.filename,
-            file_path=s3_key
+            type=data_type
         )
-        db.add(upload_record)
-        db.commit()
-        db.refresh(upload_record)
-        upload_ids.append(upload_record.id)
+        for _, row in df.iterrows()
+    ]
 
-        # Read file into DataFrame
-        try:
-            if file.filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(contents), header=None)
-            elif file.filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
-            else:
-                raise HTTPException(400, "Invalid file type")
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
-
-        if df.shape[1] != 8:
-            raise HTTPException(
-                400,
-                "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
-            )
-
-        df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
-
-        for _, row in df.iterrows():
-            all_records.append(
-                Mostvalued(
-                    name=name,
-                    company=row["company"],
-                    day=float(row["day"]),
-                    week=float(row["week"]),
-                    month=float(row["month"]),
-                    quarter=float(row["quarter"]),
-                    halfyear=float(row["halfyear"]),
-                    year=float(row["year"]),
-                    threeyear=float(row["threeyear"]),
-                    upload_date=upload_date,
-                    data_date=data_date,
-                    type=data_type
-                )
-            )
-
-    # Process all house files
-    for file, name in zip(housefile, name1):
-        await process_file(file, name)
-
-    # Process all stock files
-    for file, name in zip(stockfile, name2):
-        await process_file(file, name)
-
-    # Save all records to DB
-    db.bulk_save_objects(all_records)
+    db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": "Files uploaded successfully",
-        "upload_ids": upload_ids,
-        "records_inserted": len(all_records)
+        "message": "File uploaded successfully",
+        "upload_id": upload_record.id,
+        "records_inserted": len(records)
     }
-
-
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
@@ -266,24 +246,25 @@ async def update_upload(
     new_records = []
 
     if file:
-        # Delete old file
+        contents = await file.read()
+
+        # delete old file
         if upload.file_path:
             delete_file_from_s3(upload.file_path)
 
-        # Upload new file to S3
-        contents = await file.read()
+        # upload new file
         s3_key = upload_file_to_s3(io.BytesIO(contents), "mostvalued")
+
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Delete old records
+        # delete old records
         db.query(Mostvalued).filter(
             Mostvalued.upload_date == upload.upload_date,
             Mostvalued.data_date == upload.data_date,
             Mostvalued.type == upload.data_type
         ).delete(synchronize_session=False)
 
-        # Read new file into DataFrame
         try:
             if file.filename.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(io.BytesIO(contents), header=None)
@@ -297,15 +278,14 @@ async def update_upload(
         if df.shape[1] != 8:
             raise HTTPException(
                 400,
-                "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
+                "File must have exactly 8 columns"
             )
 
         df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
 
-        # Prepare new DB records
         new_records = [
             Mostvalued(
-                name=name if name else upload.name,
+                name=upload.name,
                 company=row["company"],
                 day=float(row["day"]),
                 week=float(row["week"]),
@@ -321,8 +301,7 @@ async def update_upload(
             for _, row in df.iterrows()
         ]
 
-        if new_records:
-            db.bulk_save_objects(new_records)
+        db.bulk_save_objects(new_records)
 
     db.commit()
     db.refresh(upload)
@@ -330,8 +309,5 @@ async def update_upload(
     return {
         "message": "Upload updated successfully",
         "upload_id": upload.id,
-        "file_name": upload.file_name,
-        "upload_date": upload.upload_date,
-        "data_date": upload.data_date,
-        "records_inserted": len(new_records) if file else 0
+        "records_inserted": len(new_records)
     }
