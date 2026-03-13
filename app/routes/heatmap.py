@@ -64,13 +64,19 @@ def get_db():
 # ---------------- CSV Reader Helper ----------------
 def read_csv_safe(file_stream, expected_columns=None):
     file_stream.seek(0)
+    contents = file_stream.read()
+    if not contents or len(contents.strip()) == 0:
+        raise HTTPException(status_code=404, detail="CSV file is empty or missing")
+
+    file_stream.seek(0)
     try:
         df = pd.read_csv(file_stream, header=None, encoding="utf-8")
     except UnicodeDecodeError:
         file_stream.seek(0)
         df = pd.read_csv(file_stream, header=None, encoding="latin1", errors="replace")
-    if df.empty:
-        raise HTTPException(status_code=400, detail="CSV file is empty")
+    except pd.errors.EmptyDataError:
+        raise HTTPException(status_code=404, detail="CSV file contains no data")
+
     df = df.where(pd.notnull(df), None)
     if expected_columns:
         if len(df.columns) > len(expected_columns):
@@ -237,7 +243,96 @@ def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db))
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
     )
+@router.put("/upload/")
+async def upload_file(
+    upload_date: str = Form(...),
+    data_date: str = Form(...),
+    data_type: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload or update a CSV file for a given data_type (company, house, industry, sector).
+    Validates CSV, uploads to S3, and inserts metadata and rows into DB.
+    """
+    data_type = data_type.lower()
+    if data_type not in TABLE_MAP:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
+    Model, UploadModel = TABLE_MAP[data_type]
+    expected_columns = COLUMN_MAP[data_type]
+
+    # ---------- Read file into memory ----------
+    contents = await file.read()
+    if not contents or len(contents.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    file_like = io.BytesIO(contents)
+
+    # ---------- Parse CSV safely ----------
+    try:
+        df = read_csv_safe(file_like, expected_columns)
+    except HTTPException as e:
+        raise HTTPException(status_code=400, detail=f"CSV parsing failed: {e.detail}")
+
+    if df.empty or df.dropna(how="all").empty:
+        raise HTTPException(status_code=400, detail="CSV contains no valid data rows")
+
+    # ---------- Upload to S3 ----------
+    file_like.seek(0)
+    try:
+        s3_key = upload_file_to_s3(
+            file_obj=file_like,
+            filename=file.filename,
+            folder=f"heatmap/{data_type}"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"S3 upload failed: {e}")
+
+    upload_date_obj = datetime.strptime(upload_date, "%Y-%m-%d").date()
+    data_date_obj = datetime.strptime(data_date, "%Y-%m-%d").date()
+
+    # ---------- Save metadata and data in DB ----------
+    upload_entry = UploadModel(
+        group_id=str(uuid.uuid4()),
+        upload_date=upload_date_obj,
+        data_date=data_date_obj,
+        data_type=data_type,
+        file_name=file.filename,
+        file_path=s3_key,
+    )
+
+    # Prepare objects for DB
+    model_columns = set(Model.__table__.columns.keys())
+    objects = []
+    for _, row in df.iterrows():
+        record = {col: row[col] for col in expected_columns if col in model_columns and col != "pk_id"}
+        objects.append(Model(**record))
+
+    if not objects:
+        delete_file_from_s3(s3_key)
+        raise HTTPException(status_code=400, detail="CSV has no valid rows for database insertion")
+
+    # Transaction-safe DB insert
+    try:
+        db.add(upload_entry)
+        db.flush()  # Assign ID
+        db.bulk_save_objects(objects)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        delete_file_from_s3(s3_key)
+        raise HTTPException(status_code=500, detail=f"Database insert failed: {e}")
+
+    db.refresh(upload_entry)
+    return {
+        "status": "success",
+        "data_type": data_type,
+        "file": file.filename,
+        "s3_key": s3_key,
+        "rows_inserted": len(objects),
+    }
 # ---------------- Delete Upload ----------------
 @router.delete("/{data_type}/{upload_id}/", response_model=dict)
 def delete_upload(data_type: str, upload_id: int, db: Session = Depends(get_db)):
