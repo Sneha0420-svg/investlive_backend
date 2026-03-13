@@ -48,7 +48,7 @@ async def upload_multiple_data(
     all_records = []
     upload_ids = []
 
-    async def process_file(file: UploadFile, name: str):
+    async def process_file(file: UploadFile, name: str, ignore_second_col: bool = False):
         contents = await file.read()
 
         # Upload to S3
@@ -79,6 +79,10 @@ async def upload_multiple_data(
         except Exception as e:
             raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
 
+        # ✅ Remove second column for stock file
+        if ignore_second_col:
+            df.drop(df.columns[1], axis=1, inplace=True)
+
         if df.shape[1] != 8:
             raise HTTPException(
                 400,
@@ -105,11 +109,11 @@ async def upload_multiple_data(
                 )
             )
 
-    # Process house file
+    # House file → normal
     await process_file(housefile, name1)
 
-    # Process stock file
-    await process_file(stockfile, name2)
+    # Stock file → ignore 2nd column
+    await process_file(stockfile, name2, ignore_second_col=True)
 
     db.bulk_save_objects(all_records)
     db.commit()
@@ -119,7 +123,6 @@ async def upload_multiple_data(
         "upload_ids": upload_ids,
         "records_inserted": len(all_records)
     }
-
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
