@@ -7,7 +7,7 @@ from app.models.heatmap import (
     House, Company, Industry, Sector
 )
 from app.schemas.heatmap import UploadBase
-from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3,get_s3_file_url
 from typing import List
 import pandas as pd
 from datetime import datetime
@@ -177,9 +177,18 @@ def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
         raise HTTPException(status_code=400, detail="Invalid data_type")
+
     UploadModel = UPLOAD_TABLES[data_type]
     uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
-    return uploads
+
+    # Add S3 URL to each upload
+    uploads_with_url = []
+    for upload in uploads:
+        upload_dict = upload.__dict__.copy()
+        upload_dict["file_url"] = get_s3_file_url(upload.file_path)
+        uploads_with_url.append(upload_dict)
+
+    return uploads_with_url
 
 # ---------------- Latest Upload Data ----------------
 @router.get("/{data_type}/latest-data-file/", response_model=list)
@@ -198,8 +207,14 @@ def get_latest_upload_data_file(data_type: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found in S3")
 
     df = read_csv_safe(file_stream, COLUMN_MAP[data_type])
-    return df.to_dict(orient="records")
+    records = df.to_dict(orient="records")
 
+    # Attach S3 URL to each record
+    s3_url = get_s3_file_url(latest_upload.file_path)
+    for record in records:
+        record["_s3_url"] = s3_url
+
+    return records
 # ---------------- Latest Upload by ISIN ----------------
 @router.get("/{data_type}/latest-data-file/{isin}", response_model=list)
 def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session = Depends(get_db)):
@@ -223,7 +238,12 @@ def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session =
     if filtered_df.empty:
         raise HTTPException(status_code=404, detail=f"No records found for ISIN {isin}")
 
-    return filtered_df.to_dict(orient="records")
+    records = filtered_df.to_dict(orient="records")
+    s3_url = get_s3_file_url(latest_upload.file_path)
+    for record in records:
+        record["_s3_url"] = s3_url
+
+    return records
 
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
