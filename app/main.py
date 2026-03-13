@@ -42,13 +42,13 @@ os.makedirs("uploads/news", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Allow CORS
 origins = [
-    "http://localhost:3000","http://3.111.78.143" ,"http://investlive.net" # your React frontend
+    "http://localhost:3000",
     # You can add other domains here if needed
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,   # or ["*"] to allow all (not recommended in production)
+    allow_origins=["*"],   # or ["*"] to allow all (not recommended in production)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
