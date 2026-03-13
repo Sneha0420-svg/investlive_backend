@@ -1,7 +1,6 @@
 import io
 from datetime import date
 from typing import List, Dict, Any
-from uuid import uuid4
 
 import pandas as pd
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
@@ -14,8 +13,7 @@ from app.models.mostvalued import Mostvalued, MostValuedupload
 from app.s3_utils import (
     upload_file_to_s3,
     delete_file_from_s3,
-    get_file_stream_from_s3,
-    get_s3_file_url
+    get_file_stream_from_s3
 )
 
 router = APIRouter(
@@ -79,7 +77,7 @@ async def upload_multiple_data(
         except Exception as e:
             raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
 
-        # ✅ Remove second column for stock file
+        # Remove 2nd column if needed (for stock files)
         if ignore_second_col:
             df.drop(df.columns[1], axis=1, inplace=True)
 
@@ -109,10 +107,10 @@ async def upload_multiple_data(
                 )
             )
 
-    # House file → normal
+    # Process house file normally
     await process_file(housefile, name1)
 
-    # Stock file → ignore 2nd column
+    # Process stock file (ignore 2nd column)
     await process_file(stockfile, name2, ignore_second_col=True)
 
     db.bulk_save_objects(all_records)
@@ -123,15 +121,14 @@ async def upload_multiple_data(
         "upload_ids": upload_ids,
         "records_inserted": len(all_records)
     }
+
+
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
     uploads = db.query(MostValuedupload).order_by(
         MostValuedupload.upload_date.desc()
     ).all()
-
-    if not uploads:
-        raise HTTPException(404, "No uploads found")
 
     return [
         {
@@ -174,16 +171,18 @@ def get_latest_stock_data(db: Session = Depends(get_db)):
     ).first()
 
     if not latest:
-        raise HTTPException(404, "No uploads found")
+        return {
+            "upload_date": None,
+            "data_date": None,
+            "type": None,
+            "stocks": []
+        }
 
     stocks = db.query(Mostvalued).filter(
-        Mostvalued.upload_date == latest.upload_date,
+        Mostvalued.name == latest.name,
         Mostvalued.data_date == latest.data_date,
         Mostvalued.type == latest.data_type
     ).order_by(Mostvalued.id).all()
-
-    if not stocks:
-        raise HTTPException(404, "No stock data found")
 
     return {
         "upload_date": latest.upload_date,
@@ -218,7 +217,7 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Upload not found")
 
     deleted_rows = db.query(Mostvalued).filter(
-        Mostvalued.upload_date == upload.upload_date,
+        Mostvalued.name == upload.name,
         Mostvalued.data_date == upload.data_date,
         Mostvalued.type == upload.data_type
     ).delete(synchronize_session=False)
@@ -253,6 +252,13 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Store old values for deletion
+    old_name = upload.name
+    old_upload_date = upload.upload_date
+    old_data_date = upload.data_date
+    old_type = upload.data_type
+
+    # Update upload fields
     if upload_date:
         upload.upload_date = upload_date
     if data_date:
@@ -263,7 +269,7 @@ async def update_upload(
     new_records = []
 
     if file:
-        # Delete old file
+        # Delete old S3 file
         if upload.file_path:
             delete_file_from_s3(upload.file_path)
 
@@ -273,14 +279,14 @@ async def update_upload(
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Delete old records
+        # Delete old Mostvalued records using old values
         db.query(Mostvalued).filter(
-            Mostvalued.upload_date == upload.upload_date,
-            Mostvalued.data_date == upload.data_date,
-            Mostvalued.type == upload.data_type
+            Mostvalued.name == old_name,
+            Mostvalued.data_date == old_data_date,
+            Mostvalued.type == old_type
         ).delete(synchronize_session=False)
 
-        # Read new file into DataFrame
+        # Read new file
         try:
             if file.filename.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(io.BytesIO(contents), header=None)
@@ -299,7 +305,6 @@ async def update_upload(
 
         df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
 
-        # Prepare new DB records
         new_records = [
             Mostvalued(
                 name=name if name else upload.name,
