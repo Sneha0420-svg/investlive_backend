@@ -4,15 +4,16 @@ from typing import List, Dict, Any
 
 import pandas as pd
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from fastapi.responses import StreamingResponse
 
 from app.database import SessionLocal
 from app.models.mostvalued import Mostvalued, MostValuedupload
 from app.s3_utils import (
     upload_file_to_s3,
     delete_file_from_s3,
+    get_s3_file_url,
     get_file_stream_from_s3
 )
 
@@ -20,7 +21,6 @@ router = APIRouter(
     prefix="/mostvalued",
     tags=["MostValuedHouseStocks"]
 )
-
 
 # -------------------- DB DEPENDENCY --------------------
 def get_db():
@@ -50,7 +50,7 @@ async def upload_multiple_data(
         contents = await file.read()
 
         # Upload to S3
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "mostvalued")
+        s3_key = upload_file_to_s3(io.BytesIO(contents), "MostValuedHouse/Stock")
 
         upload_record = MostValuedupload(
             name=name,
@@ -123,7 +123,7 @@ async def upload_multiple_data(
     }
 
 
-# -------------------- LIST UPLOADS --------------------
+# -------------------- LIST UPLOADS WITH PRESIGNED URL --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
     uploads = db.query(MostValuedupload).order_by(
@@ -138,15 +138,15 @@ def get_uploads(db: Session = Depends(get_db)):
             "data_date": u.data_date,
             "data_type": u.data_type,
             "file_name": u.file_name,
-            "file_link": f"/mostvalued/files/{u.id}"
+            "file_url": get_s3_file_url(u.file_path)  # presigned URL for direct access
         }
         for u in uploads
     ]
 
 
-# -------------------- DOWNLOAD FILE --------------------
+# -------------------- DOWNLOAD FILE USING PRESIGNED URL --------------------
 @router.get("/files/{upload_id}")
-def download_file(upload_id: int, db: Session = Depends(get_db)):
+def get_file_presigned_url(upload_id: int, db: Session = Depends(get_db)):
     upload = db.query(MostValuedupload).filter(
         MostValuedupload.id == upload_id
     ).first()
@@ -154,57 +154,85 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "File not found")
 
-    file_stream = get_file_stream_from_s3(upload.file_path)
+    presigned_url = get_s3_file_url(upload.file_path)
+    return {"file_name": upload.file_name, "url": presigned_url}
+
+
+# -------------------- DOWNLOAD CSV FILE --------------------
+@router.get("/download/{upload_id}")
+def download_file(upload_id: int, db: Session = Depends(get_db)):
+    # Fetch upload record
+    upload = db.query(MostValuedupload).filter(
+        MostValuedupload.id == upload_id
+    ).first()
+    if not upload:
+        raise HTTPException(404, "File not found")
+
+    # Get file stream from S3
+    file_stream = get_file_stream_from_s3(upload.file_path)  # You need this function in s3_utils
+    if not file_stream:
+        raise HTTPException(404, "File not found in S3")
+
+    # Ensure browser downloads with correct CSV name
     return StreamingResponse(
         file_stream,
-        media_type="application/octet-stream",
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
-    )
-
-
-# -------------------- GET LATEST DATA --------------------
+    )# -------------------- GET LATEST DATA (split by type) --------------------
 @router.get("/latest/", response_model=Dict[str, Any])
 def get_latest_stock_data(db: Session = Depends(get_db)):
-    latest = db.query(MostValuedupload).order_by(
+    # Get the most recent upload
+    latest_upload = db.query(MostValuedupload).order_by(
         desc(MostValuedupload.upload_date),
         desc(MostValuedupload.data_date)
     ).first()
 
-    if not latest:
+    if not latest_upload:
         return {
             "upload_date": None,
             "data_date": None,
             "type": None,
-            "stocks": []
+            "stock": [],
+            "house": []
         }
 
-    stocks = db.query(Mostvalued).filter(
-        Mostvalued.name == latest.name,
-        Mostvalued.data_date == latest.data_date,
-        Mostvalued.type == latest.data_type
+    # Fetch all stock data
+    stock_records = db.query(Mostvalued).filter(
+        Mostvalued.name == "stock",
+        Mostvalued.data_date == latest_upload.data_date
     ).order_by(Mostvalued.id).all()
 
-    return {
-        "upload_date": latest.upload_date,
-        "data_date": latest.data_date,
-        "type": latest.data_type,
-        "stocks": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "company": s.company,
-                "day": s.day,
-                "week": s.week,
-                "month": s.month,
-                "quarter": s.quarter,
-                "halfyear": s.halfyear,
-                "year": s.year,
-                "threeyear": s.threeyear
-            }
-            for s in stocks
-        ]
-    }
+    # Fetch all house data
+    house_records = db.query(Mostvalued).filter(
+        Mostvalued.name == "house",
+        Mostvalued.data_date == latest_upload.data_date
+    ).order_by(Mostvalued.id).all()
 
+    # Convert to dicts
+    def map_records(records):
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "company": r.company,
+                "day": r.day,
+                "week": r.week,
+                "month": r.month,
+                "quarter": r.quarter,
+                "halfyear": r.halfyear,
+                "year": r.year,
+                "threeyear": r.threeyear
+            }
+            for r in records
+        ]
+
+    return {
+        "upload_date": latest_upload.upload_date,
+        "data_date": latest_upload.data_date,
+        "type": latest_upload.data_type,
+        "stock": map_records(stock_records),
+        "house": map_records(house_records)
+    }
 
 # -------------------- DELETE UPLOAD --------------------
 @router.delete("/uploads/{upload_id}")
@@ -275,7 +303,7 @@ async def update_upload(
 
         # Upload new file to S3
         contents = await file.read()
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "mostvalued")
+        s3_key = upload_file_to_s3(io.BytesIO(contents), "MostValuedHouse/Stock")
         upload.file_name = file.filename
         upload.file_path = s3_key
 

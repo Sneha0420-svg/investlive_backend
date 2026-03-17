@@ -14,7 +14,7 @@ from app.models.corpdiary import (
     Bonus, Split, Div, BonusUpload, SplitUpload, DivUpload
 )
 from app.schemas.heatmap import UploadBase
-from app.s3_utils import upload_file_to_s3, get_file_stream_from_s3, delete_file_from_s3
+from app.s3_utils import upload_file_to_s3, get_file_stream_from_s3, delete_file_from_s3, get_s3_file_url
 
 router = APIRouter(prefix="/corpdiary", tags=["corpdiary"])
 
@@ -185,9 +185,9 @@ def get_latest_upload_by_isin(data_type: str, isin: str, db: Session = Depends(g
 
 # ---------------- Download file from S3 ----------------
 @router.get("/{data_type}/files/{upload_id}")
-def download_file(
-    data_type: str = Path(...),
-    upload_id: int = Path(...),
+def download_file_presigned(
+    data_type: str,
+    upload_id: int,
     db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
@@ -199,16 +199,18 @@ def download_file(
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    file_stream = get_file_stream_from_s3(upload.file_path)
-    if not file_stream:
+    if not upload.file_path:
+        raise HTTPException(status_code=404, detail="File path not set")
+
+    # ✅ Use presigned URL instead of streaming
+    presigned_url = get_s3_file_url(upload.file_path)
+    if not presigned_url:
         raise HTTPException(status_code=404, detail="File not found on S3")
 
-    return StreamingResponse(
-        file_stream,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={upload.file_name}"},
-    )
-
+    return {
+        "file_name": upload.file_name,
+        "url": presigned_url
+    }
 # ---------------- Update upload ----------------
 @router.put("/{data_type}/{upload_id}/")
 async def update_upload(

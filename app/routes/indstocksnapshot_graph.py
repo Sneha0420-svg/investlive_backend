@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from datetime import date
 from uuid import uuid4
 import pandas as pd
-
+from fastapi.responses import StreamingResponse
+from urllib.parse import quote
 from fastapi.responses import StreamingResponse
 from app.database import SessionLocal
 from app.models.indstocksnapshot_graph import IndStockGraph, IndStockGraphUpload
@@ -121,18 +122,63 @@ def get_latest_data(db: Session = Depends(get_db)):
         "data_type": latest_upload.data_type,
         "records": result
     }
+# ---------------- Get Latest IndStockGraph Data by TRN_DATE ----------------
+@router.get("/latest-from-graph")
+def get_latest_graph_data(db: Session = Depends(get_db)):
+    # Get the latest TRN_DATE from IndStockGraph
+    latest_date = db.query(IndStockGraph.TRN_DATE).order_by(IndStockGraph.TRN_DATE.desc()).first()
+    if not latest_date or not latest_date[0]:
+        raise HTTPException(404, "No IndStockGraph data found")
 
+    latest_date = latest_date[0]
+
+    # Fetch all records with that latest date
+    latest_records = db.query(IndStockGraph).filter(IndStockGraph.TRN_DATE == latest_date).all()
+    result = [
+        {
+            "ID": r.ID,
+            "TRN_DATE": r.TRN_DATE,
+            "STKS_TRD": r.STKS_TRD,
+            "ADV": r.ADV,
+            "DECL": r.DECL,
+            "UNCHG": r.UNCHG,
+            "group_id": r.group_id
+        } for r in latest_records
+    ]
+
+    return {
+        "latest_date": latest_date,
+        "records": result
+    }
 # ---------------- Download File ----------------
+
+
 @router.get("/download/{group_id}")
 def download_file(group_id: str, db: Session = Depends(get_db)):
     upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Stream from S3
     file_stream = get_file_stream_from_s3(upload.file_path)
-    return StreamingResponse(file_stream, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename={upload.file_name}"})
+    if file_stream is None:
+        raise HTTPException(404, "File not found in S3")
 
+    file_stream.seek(0)
+
+    if upload.file_name.lower().endswith(".csv"):
+        media_type = "text/csv"
+    elif upload.file_name.lower().endswith((".xls", ".xlsx")):
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        media_type = "application/octet-stream"
+
+    filename = quote(upload.file_name)
+
+    return StreamingResponse(
+        file_stream,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 # ---------------- Update Upload ----------------
 @router.put("/upload/{group_id}")
 async def update_upload(

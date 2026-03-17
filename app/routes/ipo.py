@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from app.database import SessionLocal
 from app.models.ipo import DataUpload, IPOUpload
 from app.schemas.ipo import UploadSummaryResponse
-from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
+from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3,get_s3_file_url
 
 
 router = APIRouter(prefix="/IPO", tags=["IPO Data"])
@@ -56,7 +56,7 @@ def clean_objs(objs):
 
 
 # -------------------- Upload Endpoint --------------------
-@router.post("/upload")
+@router.post("/upload", response_model=List[UploadSummaryResponse])
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
     upload_date: date = Form(...),
@@ -64,21 +64,22 @@ async def upload_multiple_data(
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
-
     all_records = []
-    upload_ids = []
+
+    # Delete existing data for this date combination
+    db.query(DataUpload).delete(synchronize_session=False)
+    db.commit()
+
+    response_list = []
 
     for file in files:
-
         contents = await file.read()
-
-        # S3 upload stream
-        s3_stream = io.BytesIO(contents)
-        s3_key = upload_file_to_s3(s3_stream, "ipo")
-
-        # pandas stream
         file_stream = io.BytesIO(contents)
 
+        # Upload file to S3
+        s3_key = upload_file_to_s3(io.BytesIO(contents), "ipo")
+
+        # Create IPOUpload record
         upload_record = IPOUpload(
             upload_date=upload_date,
             data_date=data_date,
@@ -86,28 +87,24 @@ async def upload_multiple_data(
             file_name=file.filename,
             file_path=s3_key
         )
-
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
 
-        upload_ids.append(upload_record.id)
+        # Generate presigned URL
+        presigned_url = get_s3_file_url(upload_record.file_path)
 
-        # Read file
-        try:
-            if file.filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_stream)
-            elif file.filename.endswith(".csv"):
-                try:
-                    df = pd.read_csv(file_stream, encoding="utf-8", on_bad_lines='skip')
-                except UnicodeDecodeError:
-                    file_stream.seek(0)
-                    df = pd.read_csv(file_stream, encoding="latin1", on_bad_lines='skip')
-            else:
-                raise HTTPException(400, "Invalid file type")
-
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file: {e}")
+        # Read file into pandas
+        if file.filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(file_stream)
+        elif file.filename.endswith(".csv"):
+            try:
+                df = pd.read_csv(file_stream, encoding="utf-8", on_bad_lines='skip')
+            except UnicodeDecodeError:
+                file_stream.seek(0)
+                df = pd.read_csv(file_stream, encoding="latin1", on_bad_lines='skip')
+        else:
+            raise HTTPException(400, "Invalid file type")
 
         if df.shape[1] != 47:
             raise HTTPException(400, "File must have exactly 47 columns")
@@ -121,16 +118,13 @@ async def upload_multiple_data(
             "LM13","LM14","LM15","MKTMKR1","MKTMKR2","MKTMKR3","MKTMKR4","MKTMKR5"
         ]
 
-        date_cols = [
-            "ISS_OPEN","ISS_CLOSE","ALLOTMENT_DATE",
-            "REFUND_DT","DEMAT_DT","TRADING_DT","LISTED_DT"
-        ]
-
+        date_cols = ["ISS_OPEN","ISS_CLOSE","ALLOTMENT_DATE","REFUND_DT","DEMAT_DT","TRADING_DT","LISTED_DT"]
         for col in date_cols:
             df[col] = df[col].apply(parse_date_safe)
 
         df = df.where(pd.notnull(df), None)
 
+        # Save IPO data rows
         for _, row in df.iterrows():
             all_records.append(
                 DataUpload(
@@ -186,15 +180,22 @@ async def upload_multiple_data(
                 )
             )
 
-    db.bulk_save_objects(all_records)
-    db.commit()
+        db.bulk_save_objects(all_records)
+        db.commit()
 
-    return {
-        "message": "Files uploaded successfully",
-        "upload_ids": upload_ids,
-        "records_inserted": len(all_records)
-    }
+        response_list.append(
+            UploadSummaryResponse(
+                id=upload_record.id,
+                upload_date=upload_record.upload_date,
+                data_date=upload_record.data_date,
+                data_type=upload_record.data_type,
+                file_name=upload_record.file_name,
+                file_link=presigned_url,
+                records_inserted=len(all_records)
+            )
+        )
 
+    return response_list
 
 # -------------------- Get Uploads --------------------
 @router.get("/uploads", response_model=List[UploadSummaryResponse])

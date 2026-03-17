@@ -11,11 +11,12 @@ from app.models.managerrank import LMRank, LMRankUpload, LMSub, LMSubUpload
 from app.s3_utils import (
     upload_file_to_s3,
     delete_file_from_s3,
-    get_file_stream_from_s3
+    get_file_stream_from_s3,
+    get_s3_file_url
 )
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/manager-rank", tags=["Manager Rank"])
-
 
 # ---------------- DB session ----------------
 def get_db():
@@ -25,11 +26,9 @@ def get_db():
     finally:
         db.close()
 
-
 # ---------------- Helpers ----------------
 def clean_nan(val):
     return None if isinstance(val, float) and math.isnan(val) else val
-
 
 # ==========================================================
 # Upload
@@ -165,9 +164,9 @@ async def upload_file(
     return {
         "message": f"{category} uploaded successfully",
         "group_id": group_id,
-        "records": len(records)
+        "records": len(records),
+        "file_url": get_s3_file_url(s3_key)  # ✅ added
     }
-
 
 # ==========================================================
 # Get Upload History
@@ -182,8 +181,18 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 
     uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
 
-    return uploads
+    result = []
+    for u in uploads:
+        result.append({
+            "group_id": u.group_id,
+            "upload_date": u.upload_date,
+            "data_date": u.data_date,
+            "category": u.category,
+            "file_name": u.file_name,
+            "file_url": get_s3_file_url(u.file_path)  # ✅ added
+        })
 
+    return result
 
 # ==========================================================
 # Get Latest Data
@@ -203,11 +212,12 @@ def get_latest_data(category: str, db: Session = Depends(get_db)):
 
     return data
 
+# ==========================================================
+# Get by LM_CODE
+# ==========================================================
 @router.get("/{category}/{lm_code}")
 def get_by_lm_code(category: str, lm_code: str, db: Session = Depends(get_db)):
-    """
-    Get all data for a specific LM_CODE in either 'lm_rank' or 'lm_sub'
-    """
+
     if category not in ["lm_rank", "lm_sub"]:
         raise HTTPException(400, "Invalid category")
 
@@ -218,22 +228,20 @@ def get_by_lm_code(category: str, lm_code: str, db: Session = Depends(get_db)):
     if not records:
         raise HTTPException(404, f"No records found for LM_CODE {lm_code}")
 
-    # Convert ORM objects to dict
     result = []
     for r in records:
         row = {}
         for column in DataModel.__table__.columns:
-            attr = column.key.lower()
-            row[column.name] = getattr(r, attr)
+            row[column.name] = getattr(r, column.key.lower())
         result.append(row)
 
     return result
+
 # ==========================================================
-# Download File
+# Download File (return S3 URL)
 # ==========================================================
 @router.get("/download/{category}/{group_id}")
 def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
-
     UploadModel = LMRankUpload if category == "lm_rank" else LMSubUpload
 
     upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
@@ -241,8 +249,14 @@ def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    return get_file_stream_from_s3(upload.file_path)
+    file_stream = get_file_stream_from_s3(upload.file_path)
 
+    # StreamingResponse sets the filename properly
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
+    )
 
 # ==========================================================
 # Update Upload
@@ -273,10 +287,10 @@ async def update_upload(
 
     if file:
 
+        # Delete old S3 file
         delete_file_from_s3(upload.file_path)
 
         contents = await file.read()
-
         s3_key = upload_file_to_s3(io.BytesIO(contents), f"manager_rank/{category}")
 
         upload.file_name = file.filename
@@ -284,8 +298,10 @@ async def update_upload(
 
     db.commit()
 
-    return {"message": "Upload updated successfully"}
-
+    return {
+        "message": "Upload updated successfully",
+        "file_url": get_s3_file_url(upload.file_path)  # ✅ return new URL
+    }
 
 # ==========================================================
 # Delete Upload
@@ -301,10 +317,13 @@ def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Delete associated data
     db.query(DataModel).filter(DataModel.group_id == group_id).delete()
 
+    # Delete S3 file
     delete_file_from_s3(upload.file_path)
 
+    # Delete DB upload record
     db.delete(upload)
     db.commit()
 

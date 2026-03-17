@@ -1,12 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
-from sqlalchemy.orm import Session
-from datetime import datetime
-from typing import List, Optional
-from uuid import uuid4
 import io
-import csv
-import pandas as pd
+from datetime import date
+from uuid import uuid4
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+import pandas as pd
 
 from app.database import SessionLocal
 from app.models.stocktrack import StockTrack, StockTrackUpload
@@ -21,106 +19,156 @@ def get_db():
         yield db
     finally:
         db.close()
+
 def safe_strip(val):
-    if val is None:
-        return None
-    return str(val).strip()
-# -------------------- UPLOAD CSV TO S3 --------------------
-@router.post("/upload-csv")
-async def upload_stocktrack_csv(
-    mkt_date: str,
+    return None if val is None else str(val).strip()
+
+def generate_s3_key(filename: str):
+    return f"stocktrack/{uuid4()}_{filename}"
+
+# -------------------- UPLOAD --------------------
+@router.post("/upload")
+async def upload_stocktrack(
+    mkt_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
+    file_bytes = await file.read()
+
+    # Upload to S3
+    s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(file.filename))
+
+    # Read file
     try:
-        # Convert mkt_date string to date object
-        mkt_date_obj = datetime.strptime(mkt_date, "%Y-%m-%d").date()
+        df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+    except Exception:
+        try:
+            df = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), header=None)
+        except Exception:
+            raise HTTPException(400, "Invalid file format")
 
-        # Upload file to S3
-        s3_key = upload_file_to_s3(file.file, f"stocktrack/{uuid4()}_{file.filename}")
+    headers = ["ID","ISIN", "WK52", "MULTI_YR", "CIRCUIT", "MOBILITY", "TREND",
+               "WK_BUST", "MTH_BUST", "QTR_BUST", "YR_BUST"]
 
-        # ------------------ DELETE ALL EXISTING DATA ------------------
-        db.query(StockTrack).delete()
-        db.commit()  # commit deletion before inserting new rows
+    if df.shape[1] != len(headers):
+        raise HTTPException(400, f"File must have {len(headers)} columns")
 
-        # ------------------ READ CSV FROM S3 ------------------
-        s3_file = get_file_stream_from_s3(s3_key)
-        df = pd.read_csv(io.StringIO(s3_file.read().decode("utf-8")), header=None)
+    df.columns = headers
 
-        # Assign headers
-        headers = ["ID","ISIN", "WK52", "MULTI_YR", "CIRCUIT", "MOBILITY", "TREND",
-                   "WK_BUST", "MTH_BUST", "QTR_BUST", "YR_BUST"]
-        df.columns = headers
+    # Delete existing data for same date
+    db.query(StockTrack).filter(StockTrack.mkt_date == mkt_date).delete()
+    db.commit()
 
-        all_records = []
-        for _, row in df.iterrows():
-            if not row["ISIN"]:
-                
-                continue
-            all_records.append(
-                StockTrack(
-                    mkt_date=mkt_date_obj,
-                    isin=safe_strip(row["ISIN"]),
-                    wk52=safe_strip(row["WK52"]),
-                    multi_yr=safe_strip(row["MULTI_YR"]),
-                    circuit=safe_strip(row["CIRCUIT"]),
-                    mobility=safe_strip(row["MOBILITY"]),
-                    trend=safe_strip(row["TREND"]),
-                    wk_bust=safe_strip(row["WK_BUST"]),
-                    mth_bust=safe_strip(row["MTH_BUST"]),
-                    qtr_bust=safe_strip(row["QTR_BUST"]),
-                    yr_bust=safe_strip(row["YR_BUST"])
-                )
-               )
+    # Insert records
+    records = []
+    for _, row in df.iterrows():
+        if not row["ISIN"]:
+            continue
 
-        if all_records:
-            db.bulk_save_objects(all_records)
-
-        # Save upload record
-        upload_record = StockTrackUpload(
-            mkt_date=mkt_date_obj,
-            file_name=file.filename,
-            file_path=s3_key
+        records.append(
+            StockTrack(
+                mkt_date=mkt_date,
+                isin=safe_strip(row["ISIN"]),
+                wk52=safe_strip(row["WK52"]),
+                multi_yr=safe_strip(row["MULTI_YR"]),
+                circuit=safe_strip(row["CIRCUIT"]),
+                mobility=safe_strip(row["MOBILITY"]),
+                trend=safe_strip(row["TREND"]),
+                wk_bust=safe_strip(row["WK_BUST"]),
+                mth_bust=safe_strip(row["MTH_BUST"]),
+                qtr_bust=safe_strip(row["QTR_BUST"]),
+                yr_bust=safe_strip(row["YR_BUST"]),
+            )
         )
-        db.add(upload_record)
+
+    if records:
+        db.bulk_save_objects(records)
         db.commit()
 
-        return {"message": "Stock Track CSV uploaded and table replaced successfully"}
+    # Save upload record
+    upload_row = StockTrackUpload(
+        mkt_date=mkt_date,
+        file_name=file.filename,
+        file_path=s3_key
+    )
+    db.add(upload_row)
+    db.commit()
 
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "message": "Uploaded successfully",
+        "records": len(records)
+    }
 
-
-# -------------------- LIST ALL UPLOADS --------------------
+# -------------------- LIST --------------------
 @router.get("/uploads")
-def get_all_uploads(db: Session = Depends(get_db)):
+def get_stocktrack_uploads(db: Session = Depends(get_db)):
     uploads = db.query(StockTrackUpload).order_by(StockTrackUpload.mkt_date.desc()).all()
+
     return [
         {
             "id": u.id,
             "mkt_date": u.mkt_date,
             "file_name": u.file_name,
-            "file_s3_url": f"/stocktrack/files/{u.id}"
+            "download_url": f"/stocktrack/download/{u.id}"
         }
         for u in uploads
     ]
 
-
-# -------------------- DOWNLOAD UPLOAD --------------------
-@router.get("/files/{upload_id}")
-def download_upload(upload_id: int, db: Session = Depends(get_db)):
+# -------------------- DOWNLOAD --------------------
+@router.get("/download/{upload_id}")
+def download_stocktrack_file(upload_id: int, db: Session = Depends(get_db)):
     upload = db.query(StockTrackUpload).filter(StockTrackUpload.id == upload_id).first()
-    if not upload or not upload.file_path:
-        raise HTTPException(404, "File not found")
 
-    s3_file = get_file_stream_from_s3(upload.file_path)
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+
+    file_stream = get_file_stream_from_s3(upload.file_path)
+
+    if not file_stream:
+        raise HTTPException(404, "File not found in S3")
+
+    # ✅ FIX: proper filename + type
+    filename = upload.file_name.lower()
+
+    if filename.endswith(".csv"):
+        media_type = "text/csv"
+    elif filename.endswith(".xlsx"):
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif filename.endswith(".xls"):
+        media_type = "application/vnd.ms-excel"
+    else:
+        media_type = "application/octet-stream"
+
     return StreamingResponse(
-        s3_file,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
+        file_stream,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{upload.file_name}"'
+        }
     )
 
+# -------------------- DELETE --------------------
+@router.delete("/upload/{upload_id}")
+def delete_stocktrack_upload(upload_id: int, db: Session = Depends(get_db)):
+    upload = db.query(StockTrackUpload).filter(StockTrackUpload.id == upload_id).first()
+
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+
+    # ✅ delete stock data using mkt_date
+    db.query(StockTrack).filter(
+        StockTrack.mkt_date == upload.mkt_date
+    ).delete(synchronize_session=False)
+
+    # ✅ delete file from S3
+    if upload.file_path:
+        delete_file_from_s3(upload.file_path)
+
+    # ✅ delete upload record
+    db.delete(upload)
+    db.commit()
+
+    return {"message": "Deleted successfully"}
 
 # -------------------- GET ALL STOCKS --------------------
 @router.get("/stocks")
@@ -167,21 +215,3 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
     }
 
 
-# -------------------- DELETE UPLOAD --------------------
-@router.delete("/uploads/{upload_id}")
-def delete_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(StockTrackUpload).filter(StockTrackUpload.id == upload_id).first()
-    if not upload:
-        raise HTTPException(status_code=404, detail="Upload not found")
-
-    # Delete related stock records
-    db.query(StockTrack).filter(StockTrack.mkt_date == upload.mkt_date).delete(synchronize_session=False)
-
-    # Delete file from S3
-    if upload.file_path:
-        delete_file_from_s3(upload.file_path)
-
-    # Delete upload record
-    db.delete(upload)
-    db.commit()
-    return {"message": f"Upload {upload_id} and its stocks deleted successfully"}

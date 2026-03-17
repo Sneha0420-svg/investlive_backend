@@ -31,10 +31,10 @@ import os
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-     docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-    root_path="/api"   # add this
+    #  docs_url="/docs",
+    # redoc_url="/redoc",
+    # openapi_url="/openapi.json",
+    # root_path="/api"   # add this
 )
 os.makedirs("uploads/news", exist_ok=True)
 

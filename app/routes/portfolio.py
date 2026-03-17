@@ -12,7 +12,8 @@ from app.models.portfolio import (
     PortfolioStocs,
     Stock_MovementsUploadHistory
 )
-from app.s3_utils import upload_file_to_s3, get_s3_file_url  # make sure these exist
+from app.s3_utils import upload_file_to_s3, get_s3_file_url,delete_file_from_s3,get_file_stream_from_s3
+from fastapi.responses import StreamingResponse
 
 from pydantic import BaseModel
 
@@ -253,3 +254,54 @@ def delete_portfolio_stock(userid: int, isin: str, db: Session = Depends(get_db)
     db.delete(stock)
     db.commit()
     return {"message": f"Stock {isin} removed from user {userid}'s portfolio successfully"}
+
+
+# ------------------------
+# Delete an uploaded CSV
+# ------------------------
+@router.delete("/uploads/{upload_id}")
+def delete_upload(upload_id: int, db: Session = Depends(get_db)):
+    upload = db.query(Stock_MovementsUploadHistory).filter(
+        Stock_MovementsUploadHistory.id == upload_id
+    ).first()
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    # Delete file from S3
+    if upload.file_path:
+        delete_file_from_s3(upload.file_path)
+
+    # Delete record from DB
+    db.delete(upload)
+    db.commit()
+
+    return {"message": f"Upload {upload.file_name} deleted successfully"}
+
+# ------------------------
+# Download an uploaded CSV
+# ------------------------
+@router.get("/uploads/download/{upload_id}")
+def download_stock_upload(upload_id: int, db: Session = Depends(get_db)):
+    """
+    Download a previously uploaded stock CSV by ID
+    """
+    upload = db.query(Stock_MovementsUploadHistory).filter(
+        Stock_MovementsUploadHistory.id == upload_id
+    ).first()
+    
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    
+    if not upload.file_path:
+        raise HTTPException(status_code=404, detail="File path missing")
+    
+    # Stream the file from S3
+    try:
+        file_stream = get_file_stream_from_s3(upload.file_path)
+        return StreamingResponse(
+            file_stream,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={upload.file_name}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found on S3")

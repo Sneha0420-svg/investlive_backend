@@ -33,7 +33,16 @@ def get_db():
         yield db
     finally:
         db.close()
-
+# -------------------- HELPER TO GET UPLOAD MODEL --------------------
+def get_upload_model(category: str):
+    if category == "52-week":
+        return FiftyTwoWeekHighLowUpload
+    elif category == "multi-year":
+        return MultiYearHighLowUpload
+    elif category == "circuit":
+        return CircuitUpLowUpload
+    else:
+        raise HTTPException(400, "Invalid category")
 # -------------------- Helpers --------------------
 def clean_nan(val):
     return None if isinstance(val, float) and math.isnan(val) else val
@@ -201,19 +210,70 @@ def get_latest_data_new_high_low(category: str, db: Session = Depends(get_db)):
     for r in result:
         r.pop("_sa_instance_state", None)
     return {"latest_data_date": latest_upload.data_date, "records": result, "count": len(result)}
+# -------------------- HIGH / LOW COUNT (fixed for all categories including multi-year TYPE) --------------------
+@router.get("/{category}/high-low/count")
+def get_high_low_count(category: str, db: Session = Depends(get_db)):
+    DataModel, UploadModel, _, _ = get_models(category)
 
+    # Get latest upload
+    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
+    if not latest_upload:
+        return {"message": "No uploads found", "high_count": 0, "low_count": 0, "total_records": 0}
+
+    # Query latest data
+    data_rows = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
+
+    high_count = 0
+    low_count = 0
+
+    if category in ["52-week", "circuit"]:
+        # Use CH_PER for high/low
+        for r in data_rows:
+            if r.CH_PER is not None:
+                if r.CH_PER > 0:
+                    high_count += 1
+                elif r.CH_PER < 0:
+                    low_count += 1
+    else:  # multi-year
+        # Use TYPE field: 1 = High, 0 = Low
+        for r in data_rows:
+            if hasattr(r, "TYPE"):
+                if r.TYPE == 1:
+                    high_count += 1
+                elif r.TYPE == 0:
+                    low_count += 1
+
+    return {
+        "latest_data_date": latest_upload.data_date,
+        "high_count": high_count,
+        "low_count": low_count,
+        "total_records": len(data_rows)
+    }
 # -------------------- DOWNLOAD --------------------
+
+# -------------------- DOWNLOAD FILE ROUTE --------------------
 @router.get("/download/{category}/{group_id}")
 def download_new_high_low_file(category: str, group_id: str, db: Session = Depends(get_db)):
-    _, UploadModel, _, _ = get_models(category)
-    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
+    UploadModel = get_upload_model(category)
+
+    # Fetch upload record
+    upload = db.query(UploadModel).filter(
+        UploadModel.group_id == group_id
+    ).first()
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # Get file stream from S3 (already BytesIO)
     file_stream = get_file_stream_from_s3(upload.file_path)
-    return StreamingResponse(file_stream, media_type="application/octet-stream",
-                             headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'})
+    if not file_stream:
+        raise HTTPException(500, "Invalid file stream from S3")
 
+    # Stream file directly (do NOT wrap in io.BytesIO)
+    return StreamingResponse(
+        file_stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
+    )
 # -------------------- UPDATE --------------------
 @router.put("/upload/{category}/{group_id}")
 async def update_new_high_low_upload(
