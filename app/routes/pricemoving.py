@@ -26,6 +26,11 @@ def get_db():
 # Upload CSV Data (No headers) -> S3
 # Replace record if same ISIN + TRN_DATE exists
 # ----------------------
+# ----------------------
+# Upload CSV Data (No headers) -> S3
+# Replace record if same ISIN + TRN_DATE exists
+# Handles empty numeric fields safely
+# ----------------------
 @router.post("/upload")
 async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.endswith(".csv"):
@@ -50,6 +55,16 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             trn_date = datetime.strptime(row[9].strip(), "%Y-%m-%d").date()
             isin = row[3].strip()
 
+            # Convert numeric fields safely
+            def to_float_safe(val):
+                return float(val) if val.strip() != "" else None
+
+            cmp = to_float_safe(row[4])
+            dma_5 = to_float_safe(row[5])
+            dma_21 = to_float_safe(row[6])
+            dma_60 = to_float_safe(row[7])
+            dma_245 = to_float_safe(row[8])
+
             existing = (
                 db.query(PriceMoving)
                 .filter(PriceMoving.ISIN == isin)
@@ -62,11 +77,11 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 existing.SCCODE = row[0].strip()
                 existing.SCRIP = row[1].strip()
                 existing.COCODE = row[2].strip()
-                existing.CMP = float(row[4])
-                existing.DMA_5 = float(row[5])
-                existing.DMA_21 = float(row[6])
-                existing.DMA_60 = float(row[7])
-                existing.DMA_245 = float(row[8])
+                existing.CMP = cmp
+                existing.DMA_5 = dma_5
+                existing.DMA_21 = dma_21
+                existing.DMA_60 = dma_60
+                existing.DMA_245 = dma_245
                 records_updated += 1
             else:
                 # Insert new record
@@ -75,11 +90,11 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                     SCRIP=row[1].strip(),
                     COCODE=row[2].strip(),
                     ISIN=isin,
-                    CMP=float(row[4]),
-                    DMA_5=float(row[5]),
-                    DMA_21=float(row[6]),
-                    DMA_60=float(row[7]),
-                    DMA_245=float(row[8]),
+                    CMP=cmp,
+                    DMA_5=dma_5,
+                    DMA_21=dma_21,
+                    DMA_60=dma_60,
+                    DMA_245=dma_245,
                     TRN_DATE=trn_date
                 )
                 db.add(pm)
@@ -97,7 +112,6 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         "records_updated": records_updated,
         "file_url": s3_url
     }
-
 # ----------------------
 # Get last 2 years data for a specific ISIN
 # ----------------------
@@ -116,15 +130,18 @@ def get_graph_data_by_isin(isin: str, db: Session = Depends(get_db)):
     if not data:
         raise HTTPException(status_code=404, detail="Data not found for this ISIN")
 
+    # Helper to convert None safely
+    def safe_float(val):
+        return float(val) if val is not None else None
+
     return {
         "dates": [d.TRN_DATE.isoformat() for d in data],
-        "CMP": [float(d.CMP) for d in data],
-        "DMA_5": [float(d.DMA_5) for d in data],
-        "DMA_21": [float(d.DMA_21) for d in data],
-        "DMA_60": [float(d.DMA_60) for d in data],
-        "DMA_245": [float(d.DMA_245) for d in data],
+        "CMP": [safe_float(d.CMP) for d in data],
+        "DMA_5": [safe_float(d.DMA_5) for d in data],
+        "DMA_21": [safe_float(d.DMA_21) for d in data],
+        "DMA_60": [safe_float(d.DMA_60) for d in data],
+        "DMA_245": [safe_float(d.DMA_245) for d in data],
     }
-
 # ----------------------
 # Get all SCCODEs
 # ----------------------
