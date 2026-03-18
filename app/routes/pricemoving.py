@@ -55,15 +55,12 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             trn_date = datetime.strptime(row[9].strip(), "%Y-%m-%d").date()
             isin = row[3].strip()
 
-            # Convert numeric fields safely
-            def to_float_safe(val):
-                return float(val) if val.strip() != "" else None
-
-            cmp = to_float_safe(row[4])
-            dma_5 = to_float_safe(row[5])
-            dma_21 = to_float_safe(row[6])
-            dma_60 = to_float_safe(row[7])
-            dma_245 = to_float_safe(row[8])
+            # Use 0.0 as default for CMP if missing
+            cmp_value = float(row[4].strip()) if row[4].strip() else 0.0
+            dma_5 = float(row[5].strip()) if row[5].strip() else 0.0
+            dma_21 = float(row[6].strip()) if row[6].strip() else 0.0
+            dma_60 = float(row[7].strip()) if row[7].strip() else 0.0
+            dma_245 = float(row[8].strip()) if row[8].strip() else 0.0
 
             existing = (
                 db.query(PriceMoving)
@@ -77,7 +74,7 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 existing.SCCODE = row[0].strip()
                 existing.SCRIP = row[1].strip()
                 existing.COCODE = row[2].strip()
-                existing.CMP = cmp
+                existing.CMP = cmp_value
                 existing.DMA_5 = dma_5
                 existing.DMA_21 = dma_21
                 existing.DMA_60 = dma_60
@@ -90,7 +87,7 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                     SCRIP=row[1].strip(),
                     COCODE=row[2].strip(),
                     ISIN=isin,
-                    CMP=cmp,
+                    CMP=cmp_value,
                     DMA_5=dma_5,
                     DMA_21=dma_21,
                     DMA_60=dma_60,
