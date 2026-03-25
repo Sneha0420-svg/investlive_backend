@@ -11,6 +11,7 @@ from app.routes.ipo import router as ipo_router
 from app.routes.snapshot import router as snapshot_router
 from app.routes.curtainraiser import router as curtaonraiser_router
 from app.routes.primarymusings import router as primarymusings_router
+from app.routes.reit import router as reit_router
 from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
@@ -31,10 +32,10 @@ import os
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-     docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-    root_path="/api"   # add this
+    #  docs_url="/docs",
+    # redoc_url="/redoc",
+    # openapi_url="/openapi.json",
+    # root_path="/api"   # add this
 )
 os.makedirs("uploads/news", exist_ok=True)
 
@@ -79,6 +80,7 @@ app.include_router(ipo_router)
 app.include_router(snapshot_router)
 app.include_router(curtaonraiser_router)
 app.include_router(primarymusings_router)
+app.include_router(reit_router)
 app.include_router(ipo_heatmap_router)
 app.include_router(managerrank_router)
 app.include_router(corpdiary_router)

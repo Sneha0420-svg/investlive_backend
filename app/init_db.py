@@ -43,6 +43,7 @@ from app.models.mostvaluedcharts import (
     MostValHouseChart,
     MostValHouseChartUpload
 )
+from app.models.reit import ReitInvitDebenture
 
 from app.models.pricemoving import PriceMoving
 from app.models.volumemoving import VolumeMoving

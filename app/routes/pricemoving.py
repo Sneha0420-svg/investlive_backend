@@ -22,10 +22,7 @@ def get_db():
     finally:
         db.close()
 
-# ----------------------
-# Upload CSV Data (No headers) -> S3
-# Replace record if same ISIN + TRN_DATE exists
-# ----------------------
+
 # ----------------------
 # Upload CSV Data (No headers) -> S3
 # Replace record if same ISIN + TRN_DATE exists

@@ -1,6 +1,6 @@
 # app/models/volumemoving.py
 
-from sqlalchemy import Column, String, Integer, Date, UniqueConstraint
+from sqlalchemy import Column, String, BigInteger, Date, UniqueConstraint,Integer
 from app.database import Base
 
 
@@ -13,7 +13,7 @@ class VolumeMoving(Base):
     SCRIP = Column(String(30), nullable=True)
     COCODE = Column(String(6), nullable=True)
     ISIN = Column(String(12), nullable=True, index=True)
-    CURVOL = Column(Integer, nullable=True)
+    CURVOL = Column(BigInteger, nullable=True)
     TRN_DATE = Column(Date, nullable=True, index=True)
 
     __table_args__ = (
