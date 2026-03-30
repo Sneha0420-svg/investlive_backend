@@ -176,7 +176,31 @@ def get_all_data(limit: int = 1000, offset: int = 0, db: Session = Depends(get_d
         }
         for d in data
     ]
+# ----------------------
+# Update ISIN in PriceMoving
+# ----------------------
+@router.put("/update-isin")
+def update_isin(
+    old_isin: str = Query(..., description="The current ISIN to be replaced"),
+    new_isin: str = Query(..., description="The new ISIN to replace with"),
+    db: Session = Depends(get_db)
+):
+    # Check if old ISIN exists
+    existing = db.query(PriceMoving).filter(PriceMoving.ISIN == old_isin).all()
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No records found with ISIN {old_isin}")
 
+    # Perform update without checking for conflicts
+    updated_count = db.query(PriceMoving).filter(PriceMoving.ISIN == old_isin).update(
+        {PriceMoving.ISIN: new_isin},
+        synchronize_session=False
+    )
+    db.commit()
+
+    return {
+        "message": f"Updated ISIN from {old_isin} to {new_isin} (existing rows with new ISIN remain intact)",
+        "rows_updated": updated_count
+    }
 # ----------------------
 # Delete PriceMoving records for a specific TRN_DATE
 # ----------------------

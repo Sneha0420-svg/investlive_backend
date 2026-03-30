@@ -1,7 +1,9 @@
 # app/routes/mktgraph.py
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException,Query
+from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException,Query
+from datetime import date
 from sqlalchemy.orm import Session
+from sqlalchemy import insert
 from datetime import datetime
 import csv
 
@@ -20,33 +22,23 @@ def get_db():
     finally:
         db.close()
 
-
-# ----------------------
-# Upload multiple CSV files (replace existing mkt_graph)
-# ----------------------
 @router.post("/upload")
-def upload_mktgraph(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
-    """
-    Upload multiple CSV files (without headers) to MktGraph table.
-    Replaces existing data in mkt_graph with new uploads.
-    All files in a single request are logged as one upload in mkt_graph_uploads.
-    """
-
+def upload_mktgraph(
+    files: list[UploadFile] = File(...),
+    mrk_date: date = Form(...),
+    db: Session = Depends(get_db)
+):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
+    total_records_attempted = 0
     total_records_inserted = 0
     errors = []
 
-    # Clear existing data in mkt_graph
-    try:
-        db.query(MktGraph).delete(synchronize_session=False)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to clear existing data: {e}")
+    # Optional: clear existing data (comment if you want incremental uploads)
+    # db.query(MktGraph).delete(synchronize_session=False)
+    # db.commit()
 
-    # Process all files
     for file in files:
         if not file.filename.lower().endswith(".csv"):
             errors.append(f"{file.filename} is not a CSV file")
@@ -59,11 +51,11 @@ def upload_mktgraph(files: list[UploadFile] = File(...), db: Session = Depends(g
                 continue
 
             reader = csv.reader(content)
+            rows_to_insert = []
             for row in reader:
                 if not row or len(row) < 7:
                     errors.append(f"Invalid row in {file.filename}: {row}")
                     continue
-
                 try:
                     scrip = row[0].strip()
                     pr_date = datetime.strptime(row[1].strip(), "%Y-%m-%d").date()
@@ -72,38 +64,39 @@ def upload_mktgraph(files: list[UploadFile] = File(...), db: Session = Depends(g
                     dma21 = float(row[4].strip())
                     dma60 = float(row[5].strip())
                     dma245 = float(row[6].strip())
-                    idx_id = int(row[7].strip()) if len(row) > 7 else 0
+                    idx_id = int(row[7].strip()) if len(row) > 7 and row[7].strip() else 0
 
-                    record = MktGraph(
-                        SCRIP=scrip,
-                        PR_DATE=pr_date,
-                        CUR_CH=cur_ch,
-                        DMA5=dma5,
-                        DMA21=dma21,
-                        DMA60=dma60,
-                        DMA245=dma245,
-                        IDX_ID=idx_id
-                    )
-                    db.add(record)
-                    total_records_inserted += 1
+                    rows_to_insert.append({
+                        "SCRIP": scrip,
+                        "PR_DATE": pr_date,
+                        "CUR_CH": cur_ch,
+                        "DMA5": dma5,
+                        "DMA21": dma21,
+                        "DMA60": dma60,
+                        "DMA245": dma245,
+                        "IDX_ID": idx_id
+                    })
+                    total_records_attempted += 1
 
                 except Exception as e:
                     errors.append(f"Error parsing row in {file.filename}: {row} -> {e}")
-                    continue
+
+            # Use PostgreSQL "ON CONFLICT DO NOTHING" to skip duplicates
+            if rows_to_insert:
+                stmt = insert(MktGraph).values(rows_to_insert)
+                stmt = stmt.on_conflict_do_nothing(index_elements=["SCRIP", "PR_DATE"])
+                result = db.execute(stmt)
+                total_records_inserted += result.rowcount
 
         except Exception as e:
             errors.append(f"Failed to process {file.filename}: {e}")
 
-    # Commit all records
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to commit records: {e}")
+    db.commit()
 
-    # Log this entire upload as a single record
+    # Log upload
     upload_log = MktGraphUploads(
         filename=", ".join([f.filename for f in files]),
+        mrk_date=mrk_date,
         upload_time=datetime.now(),
         total_records=total_records_inserted,
         errors=len(errors)
@@ -113,14 +106,11 @@ def upload_mktgraph(files: list[UploadFile] = File(...), db: Session = Depends(g
 
     return {
         "files_uploaded": len(files),
+        "total_records_attempted": total_records_attempted,
         "total_records_inserted": total_records_inserted,
         "errors": errors
     }
 
-
-# ----------------------
-# Get all upload logs
-# ----------------------
 @router.get("/uploads")
 def get_upload_logs(db: Session = Depends(get_db)):
     logs = db.query(MktGraphUploads).order_by(MktGraphUploads.upload_time.desc()).all()
@@ -129,12 +119,12 @@ def get_upload_logs(db: Session = Depends(get_db)):
             "id": l.id,
             "filename": l.filename,
             "upload_time": l.upload_time.isoformat(),
+            "mrk_date": l.mrk_date.isoformat(),
             "total_records": l.total_records,
             "errors": l.errors
         }
         for l in logs
     ]
- 
 # ----------------------
 # Get all market graph data (with pagination)
 # ----------------------

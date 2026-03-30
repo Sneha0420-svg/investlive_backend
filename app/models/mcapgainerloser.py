@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Numeric, Integer, Date
+from sqlalchemy import Column, String, Numeric, Integer, Date,BigInteger
 from app.database import Base
 
 class McapGainersLosers(Base):
@@ -7,7 +7,7 @@ class McapGainersLosers(Base):
     COMPANY = Column(String(25), nullable=True)
     ISIN = Column(String(25), primary_key=True, index=True)
     CMP = Column(Numeric(20, 2), nullable=False)
-    MCAP_CR = Column(Numeric(20, 2), nullable=False)
+    MCAP_CR = Column(BigInteger, nullable=False)
     CH_CR = Column(Numeric(20, 2), nullable=False)
     CH_PER = Column(Numeric(20, 2), nullable=False)
     VOL_NOS = Column(Integer, nullable=False)

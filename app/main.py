@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.auth import router as auth_router
+from app.routes.ads import router as ads_router
 from app.routes.marketdate import router as marketdate_router
 from app.routes.marketind import router as marketind_router
 from app.routes.marketindgraph import router as marketindgraph_router
@@ -16,6 +17,7 @@ from app.routes.ipoheatmap import router as ipo_heatmap_router
 from app.routes.news import router as news_router
 from app.routes.announcement import router as announcement_router
 from app.routes.stockpulse import router as stockpulse_router
+from app.routes.marketpulse import router as marketpulse_route
 from app.routes.stocktrack import router as stocktrack_router
 from app.routes.heatmap import router as heatmap_router
 from app.routes.portfolio import router as stocks_movement_router
@@ -60,12 +62,14 @@ def read_root():
     return {"message": "Backend run successfully"}
 
 app.include_router(auth_router)
+app.include_router(ads_router)
 app.include_router(marketdate_router)
 app.include_router(news_router)
 app.include_router(announcement_router)
 app.include_router(marketind_router)
 app.include_router(marketindgraph_router)
 app.include_router(stockpulse_router)
+app.include_router(marketpulse_route)
 app.include_router(stocktrack_router)
 app.include_router(indstocktrend_router)
 app.include_router(indstockgraph_router)

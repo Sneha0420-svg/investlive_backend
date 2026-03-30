@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Numeric, Integer, Date
+from sqlalchemy import BigInteger, Column, String, Numeric, Integer, Date
 from app.database import Base
 
 class FiftyTwoWeekHighLow(Base):
@@ -34,7 +34,7 @@ class MultiYearHighLow(Base):
 
     ISIN = Column(String(25), primary_key=True, index=True)
     COMPANY = Column(String(25), nullable=True)
-    MCAP = Column(Numeric(20, 2), nullable=False)
+    MCAP = Column(BigInteger, nullable=False)
     CMP = Column(Numeric(20, 2), nullable=False)
     MYRH = Column(Numeric(20, 2), nullable=False)
     MYRH_DT = Column(String(20), nullable=False)

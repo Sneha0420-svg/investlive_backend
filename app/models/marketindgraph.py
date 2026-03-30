@@ -18,9 +18,10 @@ class MktGraph(Base):
 
 class MktGraphUploads(Base):
     __tablename__ = "mkt_graph_uploads"
-
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
     filename = Column(String(100), nullable=False)
+    mrk_date = Column(Date, nullable=False)
     upload_time = Column(DateTime, default=datetime.now)
     total_records = Column(Integer, default=0)
     errors = Column(Integer, default=0)

@@ -193,7 +193,31 @@ def get_sccodes(db: Session = Depends(get_db)):
     sccodes = db.query(VolumeMoving.SCCODE, VolumeMoving.SCRIP).distinct().all()
     return [{"SCCODE": s[0], "SCRIP": s[1]} for s in sccodes]
 
+# ----------------------
+# Update ISIN in VolumeMoving
+# ----------------------
+@router.put("/update-isin")
+def update_isin(
+    old_isin: str = Query(..., description="The current ISIN to be replaced"),
+    new_isin: str = Query(..., description="The new ISIN to replace with"),
+    db: Session = Depends(get_db)
+):
+    # Check if old ISIN exists
+    existing = db.query(VolumeMoving).filter(VolumeMoving.ISIN == old_isin).all()
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No records found with ISIN {old_isin}")
 
+    # Perform update (no conflict check)
+    updated_count = db.query(VolumeMoving).filter(VolumeMoving.ISIN == old_isin).update(
+        {VolumeMoving.ISIN: new_isin},
+        synchronize_session=False
+    )
+    db.commit()
+
+    return {
+        "message": f"Updated ISIN from {old_isin} to {new_isin} (existing rows with new ISIN remain intact)",
+        "rows_updated": updated_count
+    }
 # ----------------------
 # Delete VolumeMoving records by TRN_DATE
 # ----------------------

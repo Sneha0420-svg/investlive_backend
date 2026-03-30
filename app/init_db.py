@@ -47,7 +47,10 @@ from app.models.reit import ReitInvitDebenture
 
 from app.models.pricemoving import PriceMoving
 from app.models.volumemoving import VolumeMoving
-
+from app.models.marketpulse import (
+    StockPulseTable, StockPulseTableUpload, StockPulseIndex,StockPulseIndexUpload
+)
+from app.models.ads import Ad
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models

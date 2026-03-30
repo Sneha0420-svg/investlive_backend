@@ -2,13 +2,13 @@ import io
 import uuid
 from datetime import datetime
 from typing import List
+import math
 
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-
 from app.database import SessionLocal
 from app.models.heatmap import (
     HouseUpload, CompanyUpload, IndustryUpload, SectorUpload,
@@ -65,11 +65,12 @@ def get_db():
         db.close()
 
 # ---------------- CSV Reader Helper ----------------
+# ---------------- CSV Reader ----------------
 def read_csv_safe(file_stream, expected_columns=None):
     file_stream.seek(0)
     contents = file_stream.read()
     if not contents or len(contents.strip()) == 0:
-        raise HTTPException(status_code=404, detail="CSV file is empty or missing")
+        raise HTTPException(status_code=404, detail="CSV file is empty")
 
     file_stream.seek(0)
     try:
@@ -78,19 +79,14 @@ def read_csv_safe(file_stream, expected_columns=None):
         file_stream.seek(0)
         df = pd.read_csv(file_stream, header=None, encoding="latin1")
     except pd.errors.EmptyDataError:
-        raise HTTPException(status_code=404, detail="CSV file contains no data")
-
-    df = df.where(pd.notnull(df), None)
+        raise HTTPException(status_code=404, detail="CSV has no data")
 
     if expected_columns:
-        if len(df.columns) > len(expected_columns):
-            extra = len(df.columns) - len(expected_columns)
-            df.columns = expected_columns + [f"extra_{i}" for i in range(extra)]
-        elif len(df.columns) < len(expected_columns):
-            missing = len(expected_columns) - len(df.columns)
-            df.columns = df.columns.tolist() + [f"col_{i}" for i in range(missing)]
-        else:
+        if len(df.columns) >= len(expected_columns):
+            df = df.iloc[:, :len(expected_columns)]
             df.columns = expected_columns
+        else:
+            raise HTTPException(status_code=400, detail="CSV column mismatch")
 
     return df
 
@@ -106,8 +102,6 @@ async def upload_file(
     data_type = data_type.lower()
     if data_type not in TABLE_MAP:
         raise HTTPException(status_code=400, detail="Invalid data_type")
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
     Model, UploadModel = TABLE_MAP[data_type]
     expected_columns = COLUMN_MAP[data_type]
@@ -115,24 +109,29 @@ async def upload_file(
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
     file_like = io.BytesIO(contents)
 
     df = read_csv_safe(file_like, expected_columns)
 
+    # 🔥 CRITICAL FIX: remove NaN properly
+    df = df.astype(object).where(pd.notnull(df), None)
+
+    # Upload to S3
     file_like.seek(0)
     try:
-        # Correct S3 call: folder must be keyword
-        s3_key = upload_file_to_s3(file_obj=file_like, folder=f"heatmap/{data_type}", filename=file.filename)
+        s3_key = upload_file_to_s3(
+            file_obj=file_like,
+            folder=f"heatmap/{data_type}",
+            filename=file.filename
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"S3 upload failed: {e}")
 
-    upload_date_obj = datetime.strptime(upload_date, "%Y-%m-%d").date()
-    data_date_obj = datetime.strptime(data_date, "%Y-%m-%d").date()
-
     upload_entry = UploadModel(
         group_id=str(uuid.uuid4()),
-        upload_date=upload_date_obj,
-        data_date=data_date_obj,
+        upload_date=datetime.strptime(upload_date, "%Y-%m-%d").date(),
+        data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
         data_type=data_type,
         file_name=file.filename,
         file_path=s3_key,
@@ -140,13 +139,36 @@ async def upload_file(
 
     model_columns = set(Model.__table__.columns.keys())
     objects = []
+
+    # 🔥 FINAL SAFE INSERT LOOP
     for _, row in df.iterrows():
-        record = {col: row[col] for col in expected_columns if col in model_columns and col != "pk_id"}
+        record = {}
+
+        for col in expected_columns:
+            if col not in model_columns or col == "pk_id":
+                continue
+
+            val = row[col]
+
+            if pd.isna(val):
+                val = None
+
+            elif isinstance(val, float):
+                if math.isnan(val):
+                    val = None
+                elif val.is_integer():
+                    val = int(val)
+
+            elif isinstance(val, str):
+                val = val.strip()
+
+            record[col] = val
+
         objects.append(Model(**record))
 
     if not objects:
         delete_file_from_s3(s3_key)
-        raise HTTPException(status_code=400, detail="No valid rows found in CSV")
+        raise HTTPException(status_code=400, detail="No valid rows")
 
     try:
         db.add(upload_entry)
@@ -158,16 +180,11 @@ async def upload_file(
         delete_file_from_s3(s3_key)
         raise HTTPException(status_code=500, detail=f"Database insert failed: {e}")
 
-    db.refresh(upload_entry)
     return {
         "status": "success",
-        "data_type": data_type,
-        "file": file.filename,
-        "s3_key": s3_key,
         "rows_inserted": len(objects),
         "file_url": get_s3_file_url(s3_key)
     }
-
 # ---------------- Get All Uploads ----------------
 @router.get("/{data_type}/", response_model=List[UploadBase])
 def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
