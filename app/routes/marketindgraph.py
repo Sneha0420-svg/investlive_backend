@@ -21,7 +21,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 @router.post("/upload")
 def upload_mktgraph(
     files: list[UploadFile] = File(...),
@@ -35,9 +34,9 @@ def upload_mktgraph(
     total_records_inserted = 0
     errors = []
 
-    # Optional: clear existing data (comment if you want incremental uploads)
-    # db.query(MktGraph).delete(synchronize_session=False)
-    # db.commit()
+    # 🔥 MAIN FIX: DELETE OLD DATA
+    db.query(MktGraph).delete(synchronize_session=False)
+    db.commit()
 
     for file in files:
         if not file.filename.lower().endswith(".csv"):
@@ -52,39 +51,31 @@ def upload_mktgraph(
 
             reader = csv.reader(content)
             rows_to_insert = []
+
             for row in reader:
                 if not row or len(row) < 7:
                     errors.append(f"Invalid row in {file.filename}: {row}")
                     continue
-                try:
-                    scrip = row[0].strip()
-                    pr_date = datetime.strptime(row[1].strip(), "%Y-%m-%d").date()
-                    cur_ch = float(row[2].strip())
-                    dma5 = float(row[3].strip())
-                    dma21 = float(row[4].strip())
-                    dma60 = float(row[5].strip())
-                    dma245 = float(row[6].strip())
-                    idx_id = int(row[7].strip()) if len(row) > 7 and row[7].strip() else 0
 
+                try:
                     rows_to_insert.append({
-                        "SCRIP": scrip,
-                        "PR_DATE": pr_date,
-                        "CUR_CH": cur_ch,
-                        "DMA5": dma5,
-                        "DMA21": dma21,
-                        "DMA60": dma60,
-                        "DMA245": dma245,
-                        "IDX_ID": idx_id
+                        "SCRIP": row[0].strip(),
+                        "PR_DATE": datetime.strptime(row[1].strip(), "%Y-%m-%d").date(),
+                        "CUR_CH": float(row[2].strip()),
+                        "DMA5": float(row[3].strip()),
+                        "DMA21": float(row[4].strip()),
+                        "DMA60": float(row[5].strip()),
+                        "DMA245": float(row[6].strip()),
+                        "IDX_ID": int(row[7].strip()) if len(row) > 7 and row[7].strip() else 0
                     })
                     total_records_attempted += 1
 
                 except Exception as e:
                     errors.append(f"Error parsing row in {file.filename}: {row} -> {e}")
 
-            # Use PostgreSQL "ON CONFLICT DO NOTHING" to skip duplicates
+            # ✅ SIMPLE INSERT (no conflict logic needed now)
             if rows_to_insert:
                 stmt = insert(MktGraph).values(rows_to_insert)
-                stmt = stmt.on_conflict_do_nothing(index_elements=["SCRIP", "PR_DATE"])
                 result = db.execute(stmt)
                 total_records_inserted += result.rowcount
 
@@ -93,7 +84,6 @@ def upload_mktgraph(
 
     db.commit()
 
-    # Log upload
     upload_log = MktGraphUploads(
         filename=", ".join([f.filename for f in files]),
         mrk_date=mrk_date,
@@ -101,6 +91,7 @@ def upload_mktgraph(
         total_records=total_records_inserted,
         errors=len(errors)
     )
+
     db.add(upload_log)
     db.commit()
 
@@ -110,7 +101,6 @@ def upload_mktgraph(
         "total_records_inserted": total_records_inserted,
         "errors": errors
     }
-
 @router.get("/uploads")
 def get_upload_logs(db: Session = Depends(get_db)):
     logs = db.query(MktGraphUploads).order_by(MktGraphUploads.upload_time.desc()).all()
@@ -130,7 +120,7 @@ def get_upload_logs(db: Session = Depends(get_db)):
 # ----------------------
 @router.get("/all")
 def get_all_mktgraph(
-    limit: int = 1000,
+    limit: int = 250,
     offset: int = 0,
     db: Session = Depends(get_db)
 ):
@@ -167,7 +157,7 @@ def get_all_mktgraph(
 @router.get("/by-idx")
 def get_mktgraph_by_idx(
     idx_id: int = Query(..., description="Index ID to filter data"),
-    limit: int = 1000,
+    limit: int = 250,
     offset: int = 0,
     db: Session = Depends(get_db)
 ):

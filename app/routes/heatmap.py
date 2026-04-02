@@ -205,7 +205,11 @@ def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
 
 # ---------------- Latest Upload Data ----------------
 @router.get("/{data_type}/latest-data-file/", response_model=list)
-def get_latest_upload_data_file(data_type: str, db: Session = Depends(get_db)):
+def get_latest_upload_data_file(
+    data_type: str,
+    limit: int = 100,  # default limit
+    db: Session = Depends(get_db)
+):
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
         raise HTTPException(status_code=400, detail="Invalid data_type")
@@ -220,8 +224,11 @@ def get_latest_upload_data_file(data_type: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found in S3")
 
     df = read_csv_safe(file_stream, COLUMN_MAP[data_type])
-    records = df.to_dict(orient="records")
+    
+    # Limit rows
+    df = df.head(limit)
 
+    records = df.to_dict(orient="records")
     s3_url = get_s3_file_url(latest_upload.file_path)
     for record in records:
         record["_s3_url"] = s3_url
@@ -230,7 +237,12 @@ def get_latest_upload_data_file(data_type: str, db: Session = Depends(get_db)):
 
 # ---------------- Latest Upload by ISIN ----------------
 @router.get("/{data_type}/latest-data-file/{isin}", response_model=list)
-def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session = Depends(get_db)):
+def get_latest_upload_data_file_by_isin(
+    data_type: str,
+    isin: str,
+    limit: int = 100,  # default limit
+    db: Session = Depends(get_db)
+):
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
         raise HTTPException(status_code=400, detail="Invalid data_type")
@@ -247,9 +259,13 @@ def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session =
     df = read_csv_safe(file_stream, COLUMN_MAP[data_type])
     isin_col = "ISIN" if "ISIN" in df.columns else df.columns[0]
     df[isin_col] = df[isin_col].astype(str).str.strip()
+
     filtered_df = df[df[isin_col] == isin.strip()]
     if filtered_df.empty:
         raise HTTPException(status_code=404, detail=f"No records found for ISIN {isin}")
+
+    # Limit rows
+    filtered_df = filtered_df.head(limit)
 
     records = filtered_df.to_dict(orient="records")
     s3_url = get_s3_file_url(latest_upload.file_path)
@@ -257,7 +273,6 @@ def get_latest_upload_data_file_by_isin(data_type: str, isin: str, db: Session =
         record["_s3_url"] = s3_url
 
     return records
-
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
 def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db)):

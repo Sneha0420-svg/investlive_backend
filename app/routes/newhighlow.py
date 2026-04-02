@@ -92,19 +92,27 @@ async def upload_new_high_low(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, expected_cols, columns = get_models(category)
+
     group_id = str(uuid4())
     file_bytes = await file.read()
 
-    # Upload to S3
-    s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(category, file.filename))
+    # ✅ Upload to S3
+    s3_key = upload_file_to_s3(
+        io.BytesIO(file_bytes),
+        generate_s3_key(category, file.filename)
+    )
 
-    # Read file
+    # ✅ Read file
     df = read_file_bytes(file_bytes, expected_cols, columns, category)
 
-    # Remove duplicates in the uploaded file itself
+    # ✅ Remove duplicates inside file
     df = df.drop_duplicates(subset=["ISIN"])
 
-    # Store upload info
+    # ✅ 🚨 DELETE OLD DATA (MAIN FIX)
+    db.query(DataModel).delete(synchronize_session=False)
+    db.commit()
+
+    # ✅ Store upload info
     upload_row = UploadModel(
         group_id=group_id,
         upload_date=upload_date,
@@ -114,14 +122,12 @@ async def upload_new_high_low(
         file_path=s3_key
     )
     db.add(upload_row)
-    db.commit()  # commit to generate upload_row.id if needed
+    db.commit()
 
-    # Clear existing records with same data_date or category
-    db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
-    
-    # Prepare new records
+    # ✅ Prepare records
     records = []
     for _, row in df.iterrows():
+
         if category == "52-week":
             records.append(DataModel(
                 COMPANY=clean_nan(row["COMPANY"]),
@@ -133,6 +139,7 @@ async def upload_new_high_low(
                 CH_PER=clean_nan(row["CH_PER"]),
                 group_id=group_id
             ))
+
         elif category == "circuit":
             records.append(DataModel(
                 COMPANY=clean_nan(row["COMPANY"]),
@@ -148,7 +155,8 @@ async def upload_new_high_low(
                 WKL_DT_52=str(row["52WKLDT"]),
                 group_id=group_id
             ))
-        else:
+
+        else:  # multi-year
             records.append(DataModel(
                 COMPANY=clean_nan(row["COMPANY"]),
                 ISIN=row["ISIN"],
@@ -164,19 +172,19 @@ async def upload_new_high_low(
                 group_id=group_id
             ))
 
-    # Bulk save records safely
+    # ✅ Insert new data
     if records:
         try:
             db.bulk_save_objects(records)
             db.commit()
         except Exception as e:
             db.rollback()
-            raise HTTPException(500, f"Failed to insert records: {str(e)}")
+            raise HTTPException(500, f"Insert failed: {str(e)}")
 
     return {
         "message": f"{category} data uploaded successfully",
         "group_id": group_id,
-        "records": len(df),
+        "records": len(records),
         "file_s3_url": get_s3_file_url(s3_key)
     }
 # -------------------- LIST UPLOADS --------------------
