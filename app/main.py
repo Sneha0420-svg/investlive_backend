@@ -1,5 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.staticfiles import StaticFiles
+import secrets
+import os
+
+# =========================
+# IMPORT ROUTERS
+# =========================
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.marketdate import router as marketdate_router
@@ -29,38 +38,84 @@ from app.routes.managerrank import router as managerrank_router
 from app.routes.mostvaluedcharts import router as mostvaluedcharts_router
 from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
-from fastapi.staticfiles import StaticFiles
-import os
+
+# =========================
+# APP INIT (DISABLE DEFAULT DOCS)
+# =========================
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-     docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None,          # disable default docs
+    redoc_url=None,         # disable default redoc
     openapi_url="/openapi.json",
-    root_path="/api"   # add this
+    root_path="/api"
 )
+
+# =========================
+# STATIC FILES
+# =========================
 os.makedirs("uploads/news", exist_ok=True)
-
-# Serve the uploads folder
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-# Allow CORS
-origins = [
-    "http://localhost:3000",
-    # You can add other domains here if needed
-]
 
+# =========================
+# CORS
+# =========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # or ["*"] to allow all (not recommended in production)
+    allow_origins=["*"],   # change in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# =========================
+# BASIC AUTH FOR DOCS
+# =========================
+security = HTTPBasic()
+
+DOCS_USERNAME = os.getenv("DOCS_USERNAME", "invest")
+DOCS_PASSWORD = os.getenv("DOCS_PASSWORD", "investlive.in")
+
+
+def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_username = secrets.compare_digest(credentials.username, DOCS_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, DOCS_PASSWORD)
+
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+# =========================
+# PROTECTED DOCS
+# =========================
+@app.get("/docs", include_in_schema=False)
+def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title="Investlive API Docs"
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title="Investlive ReDoc"
+    )
+
+# =========================
+# ROOT
+# =========================
 @app.get("/")
 def read_root():
     return {"message": "Backend run successfully"}
 
+# =========================
+# ROUTERS
+# =========================
 app.include_router(auth_router)
 app.include_router(ads_router)
 app.include_router(marketdate_router)
