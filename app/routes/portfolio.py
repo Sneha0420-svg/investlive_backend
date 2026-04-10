@@ -76,9 +76,10 @@ def clean_val(val):
         return f
     except:
         return None
+from sqlalchemy import text
 
 # ------------------------
-# Upload CSV and update stock movements
+# Upload CSV and reset stock movements
 # ------------------------
 @router.post("/upload-stock-csv")
 async def upload_stock_csv(
@@ -89,35 +90,47 @@ async def upload_stock_csv(
     if not file.filename.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
-    # Read file content
     content = await file.read()
+
     try:
         df = pd.read_csv(io.BytesIO(content), header=None, encoding="ISO-8859-1")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read CSV: {e}")
 
-    # Upload CSV to S3 under separate folder "stocks_movements"
-    s3_key = upload_file_to_s3(io.BytesIO(content), folder="stocks_movements")
+    # Upload to S3
+    s3_key = upload_file_to_s3(
+        io.BytesIO(content),
+        folder="stocks_movements"
+    )
 
-    # Save upload history in DB
+    # Save upload history (KEEP SAFE)
     upload = Stock_MovementsUploadHistory(
         file_name=file.filename,
         file_path=s3_key,
         mkt_date=mkt_date
     )
     db.add(upload)
-    db.commit()
-    db.refresh(upload)
+    db.flush()  # safer than commit here
+
+    # ==============================
+    # 💣 FULL RESET STOCK TABLE
+    # ==============================
+    db.query(Stocks_Movements).delete(synchronize_session=False)
+
+    # (FASTER OPTION)
+    # db.execute(text("TRUNCATE TABLE stocks_movements RESTART IDENTITY CASCADE"))
 
     # CSV column indices
     company_col = 2
     isin_col = 29
     ch_col = 5
 
-    # Update or insert stock movements
+    records = []
+
     for _, row in df.iterrows():
         company = str(row[company_col]).strip()
         isin = str(row[isin_col]).strip()
+
         try:
             ch_val = float(row[ch_col])
             ch = None if math.isnan(ch_val) or math.isinf(ch_val) else round(ch_val, 2)
@@ -127,12 +140,8 @@ async def upload_stock_csv(
         if not company or not isin or ch is None:
             continue
 
-        stock = db.query(Stocks_Movements).filter(Stocks_Movements.isin == isin).first()
-        if stock:
-            days = [ch, stock.Day_1, stock.Day_2, stock.Day_3, stock.Day_4]
-            stock.Day_1, stock.Day_2, stock.Day_3, stock.Day_4, stock.Day_5 = days
-        else:
-            stock = Stocks_Movements(
+        records.append(
+            Stocks_Movements(
                 company=company,
                 isin=isin,
                 Day_1=ch,
@@ -141,15 +150,17 @@ async def upload_stock_csv(
                 Day_4=None,
                 Day_5=None
             )
-            db.add(stock)
+        )
 
+    db.bulk_save_objects(records)
     db.commit()
-    return {
-        "message": "CSV uploaded and stock movements updated successfully",
-        "upload_id": upload.id,
-        "file_url": get_s3_file_url(s3_key)
-    }
 
+    return {
+        "message": "Stock movements fully refreshed successfully",
+        "upload_id": upload.id,
+        "file_url": get_s3_file_url(s3_key),
+        "records_inserted": len(records)
+    }
 # ------------------------
 # Get all uploads
 # ------------------------

@@ -49,7 +49,7 @@ async def upload_file(
     upload_date: str = Form(...),
     data_date: str = Form(...),
     data_type: str = Form(...),
-    files: List[UploadFile] = File(...),  # 🔥 multiple files
+    files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
@@ -61,119 +61,121 @@ async def upload_file(
     all_dfs = []
     s3_keys = []
 
-    # ---------- Process each file ----------
-    for file in files:
-        if not file.filename.lower().endswith(".csv"):
-            raise HTTPException(status_code=400, detail=f"{file.filename} is not a CSV")
+    try:
+        # ---------- Process each file ----------
+        for file in files:
+            if not file.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=400, detail=f"{file.filename} is not a CSV")
 
-        content = await file.read()
-        file_like = io.BytesIO(content)
+            content = await file.read()
+            file_like = io.BytesIO(content)
 
-        # Upload each file to S3
-        s3_key = upload_file_to_s3(
-            file_obj=file_like,
-            folder=f"corpdiary/{data_type}",
-            filename=file.filename
-        )
-        s3_keys.append(s3_key)
+            # Upload to S3
+            s3_key = upload_file_to_s3(
+                file_obj=file_like,
+                folder=f"corpdiary/{data_type}",
+                filename=file.filename
+            )
+            s3_keys.append(s3_key)
 
-        # Read CSV
-        try:
-            df = pd.read_csv(io.BytesIO(content), header=None, encoding="utf-8")
-        except UnicodeDecodeError:
-            df = pd.read_csv(io.BytesIO(content), header=None, encoding="latin1")
+            # Read CSV
+            try:
+                df = pd.read_csv(io.BytesIO(content), header=None, encoding="utf-8")
+            except UnicodeDecodeError:
+                df = pd.read_csv(io.BytesIO(content), header=None, encoding="latin1")
 
-        if df.shape[1] != len(expected_columns):
+            if df.shape[1] != len(expected_columns):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{file.filename}: Expected {len(expected_columns)} columns, got {df.shape[1]}",
+                )
+
+            df.columns = expected_columns
+            df = df.where(pd.notnull(df), None)
+
+            all_dfs.append(df)
+
+        # ---------- Merge all CSVs ----------
+        df = pd.concat(all_dfs, ignore_index=True)
+
+        # ---------- DATE FIX ----------
+        def parse_date_safe(x):
+            if x in (None, "", "nan"):
+                return None
+            for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    return datetime.strptime(str(x), fmt).date()
+                except:
+                    continue
+            raise ValueError(f"Invalid date format: {x}")
+
+        if "EX_DT" in df.columns:
+            df["EX_DT"] = df["EX_DT"].apply(parse_date_safe)
+
+        # ---------- Prepare ORM ----------
+        model_columns = set(Model.__table__.columns.keys())
+        objects = []
+        errors = []
+
+        for idx, row in df.iterrows():
+            try:
+                record = {}
+
+                for col in expected_columns:
+                    if col not in model_columns or col == "ID":
+                        continue
+
+                    record[col] = row[col]
+
+                objects.append(Model(**record))
+
+            except Exception as e:
+                errors.append({"row": int(idx), "error": str(e)})
+
+        if errors:
             raise HTTPException(
                 status_code=400,
-                detail=f"{file.filename}: Expected {len(expected_columns)} columns, got {df.shape[1]}",
+                detail={"message": "Errors in CSV", "sample": errors[:10]}
             )
 
-        df.columns = expected_columns
-        df = df.where(pd.notnull(df), None)
+        if not objects:
+            raise HTTPException(status_code=400, detail="No valid rows found")
 
-        all_dfs.append(df)
+        # 🔥🔥🔥 IMPORTANT CHANGE HERE 🔥🔥🔥
+        # ---------- DELETE ALL OLD DATA ----------
+        db.query(Model).delete(synchronize_session=False)
 
-    # ---------- Merge all CSVs ----------
-    df = pd.concat(all_dfs, ignore_index=True)
-
-    # ---------- DATE FIX ----------
-    def parse_date_safe(x):
-        if x in (None, "", "nan"):
-            return None
-        for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
-            try:
-                return datetime.strptime(str(x), fmt).date()
-            except:
-                continue
-        raise ValueError(f"Invalid date format: {x}")
-
-    if "EX_DT" in df.columns:
-        try:
-            df["EX_DT"] = df["EX_DT"].apply(parse_date_safe)
-        except Exception as e:
-            for key in s3_keys:
-                delete_file_from_s3(key)
-            raise HTTPException(status_code=400, detail=str(e))
-
-    # ---------- Prepare ORM ----------
-    model_columns = set(Model.__table__.columns.keys())
-    objects = []
-    errors = []
-
-    for idx, row in df.iterrows():
-        try:
-            record = {}
-
-            for col in expected_columns:
-                if col not in model_columns or col == "ID":
-                    continue
-
-                record[col] = row[col]
-
-            objects.append(Model(**record))
-
-        except Exception as e:
-            errors.append({"row": int(idx), "error": str(e)})
-
-    if errors:
-        for key in s3_keys:
-            delete_file_from_s3(key)
-        raise HTTPException(
-            status_code=400,
-            detail={"message": "Errors in CSV", "sample": errors[:10]}
+        # ---------- Save metadata ----------
+        upload_entry = UploadModel(
+            group_id=str(uuid.uuid4()),
+            upload_date=datetime.strptime(upload_date, "%Y-%m-%d").date(),
+            data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
+            data_type=data_type,
+            file_name=",".join([f.filename for f in files]),
+            file_path=",".join(s3_keys)
         )
 
-    if not objects:
-        raise HTTPException(status_code=400, detail="No valid rows found")
-
-    # ---------- Save metadata ----------
-    upload_entry = UploadModel(
-        group_id=str(uuid.uuid4()),
-        upload_date=datetime.strptime(upload_date, "%Y-%m-%d").date(),
-        data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
-        data_type=data_type,
-        file_name=",".join([f.filename for f in files]),  # store all names
-        file_path=",".join(s3_keys)  # store multiple paths
-    )
-
-    # ---------- DB Insert ----------
-    try:
+        # ---------- DB Insert ----------
         db.add(upload_entry)
         db.bulk_save_objects(objects)
+
         db.commit()
+
+        return {
+            "status": "success",
+            "files_uploaded": [f.filename for f in files],
+            "rows_inserted": len(objects),
+            "s3_keys": s3_keys
+        }
+
     except Exception as e:
         db.rollback()
+
+        # Cleanup S3 if failure
         for key in s3_keys:
             delete_file_from_s3(key)
-        raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "status": "success",
-        "files_uploaded": [f.filename for f in files],
-        "rows_inserted": len(objects),
-        "s3_keys": s3_keys
-    }
+        raise HTTPException(status_code=500, detail=str(e))
 # ---------------- Get all uploads ----------------
 @router.get("/{data_type}/", response_model=List[UploadBase])
 def get_all_uploads(data_type: str, db: Session = Depends(get_db)):

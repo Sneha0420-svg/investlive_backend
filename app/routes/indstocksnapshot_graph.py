@@ -25,6 +25,8 @@ def get_db():
 def clean_nan(val):
     return None if isinstance(val, float) and pd.isna(val) else val
 
+from sqlalchemy.exc import SQLAlchemyError
+
 # ---------------- Upload ----------------
 @router.post("/upload")
 async def upload_file(
@@ -34,54 +36,77 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     group_id = str(uuid4())
-    contents = await file.read()
-    file_like = io.BytesIO(contents)
-    # Upload to S3
-    s3_folder = "indstockgraphgraph"
-    s3_key = upload_file_to_s3(file_obj=file_like, folder=s3_folder, filename=file.filename)
 
-    # Read CSV / Excel from file memory
-    file.file.seek(0)
-    if file.filename.lower().endswith(".csv"):
-        df = pd.read_csv(file.file, header=None)
-    else:
-        df = pd.read_excel(file.file, header=None)
+    try:
+        contents = await file.read()
+        file_like = io.BytesIO(contents)
 
-    if df.shape[1] != 6:
-        raise HTTPException(
-            400,
-            "File must have exactly 6 columns: ID, TRN_DATE, STKS_TRD, ADV, DECL, UNCHG"
+        # Upload to S3
+        s3_folder = "indstockgraphgraph"
+        s3_key = upload_file_to_s3(
+            file_obj=file_like,
+            folder=s3_folder,
+            filename=file.filename
         )
 
-    df.columns = ["ID", "TRN_DATE", "STKS_TRD", "ADV", "DECL", "UNCHG"]
-    df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
+        # Read file again
+        file.file.seek(0)
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(file.file, header=None)
+        else:
+            df = pd.read_excel(file.file, header=None)
 
-    records = [
-        IndStockGraph(
-            TRN_DATE=r["TRN_DATE"],
-            STKS_TRD=int(r["STKS_TRD"]),
-            ADV=int(r["ADV"]),
-            DECL=int(r["DECL"]),
-            UNCHG=int(r["UNCHG"]),
-            group_id=group_id
+        if df.shape[1] != 6:
+            raise HTTPException(
+                400,
+                "File must have exactly 6 columns: ID, TRN_DATE, STKS_TRD, ADV, DECL, UNCHG"
+            )
+
+        df.columns = ["ID", "TRN_DATE", "STKS_TRD", "ADV", "DECL", "UNCHG"]
+        df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"], errors="coerce").dt.date
+
+        if df.empty:
+            raise HTTPException(400, "Uploaded file is empty")
+
+        # 🔥🔥🔥 DELETE ALL OLD DATA
+        db.query(IndStockGraph).delete(synchronize_session=False)
+
+        # Prepare records
+        records = [
+            IndStockGraph(
+                TRN_DATE=r["TRN_DATE"],
+                STKS_TRD=int(r["STKS_TRD"]) if r["STKS_TRD"] else 0,
+                ADV=int(r["ADV"]) if r["ADV"] else 0,
+                DECL=int(r["DECL"]) if r["DECL"] else 0,
+                UNCHG=int(r["UNCHG"]) if r["UNCHG"] else 0,
+                group_id=group_id
+            )
+            for _, r in df.iterrows()
+        ]
+
+        upload_row = IndStockGraphUpload(
+            group_id=group_id,
+            upload_date=upload_date,
+            data_date=data_date,
+            data_type="IndStockGraph",
+            file_name=file.filename,
+            file_path=s3_key
         )
-        for _, r in df.iterrows()
-    ]
 
-    upload_row = IndStockGraphUpload(
-        group_id=group_id,
-        upload_date=upload_date,
-        data_date=data_date,
-        data_type="IndStockGraph",
-        file_name=file.filename,
-        file_path=s3_key  # S3 key instead of local path
-    )
+        db.add(upload_row)
+        db.bulk_save_objects(records)
+        db.commit()
 
-    db.add(upload_row)
-    db.bulk_save_objects(records)
-    db.commit()
+        return {
+            "message": "Old data deleted and new data inserted",
+            "group_id": group_id,
+            "records": len(records)
+        }
 
-    return {"message": "Upload successful", "group_id": group_id, "records": len(records)}
+    except Exception as e:
+        db.rollback()
+        delete_file_from_s3(s3_key)
+        raise HTTPException(500, f"Error: {str(e)}")
 
 # ---------------- Get Uploads ----------------
 @router.get("/uploads")

@@ -64,6 +64,7 @@ def read_file_from_bytes(file_bytes: bytes, required_columns: list, category: st
     df.columns = required_columns
     df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
     return df
+from sqlalchemy import text
 
 # -------------------- UPLOAD --------------------
 @router.post("/{category}/upload")
@@ -75,17 +76,41 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, required_columns = get_models(category)
+
     group_id = str(uuid4())
     file_bytes = await file.read()
-    
+
     # Upload file to S3
-    s3_key = upload_file_to_s3(io.BytesIO(file_bytes), f"{category}/{uuid4()}_{file.filename}")
+    s3_key = upload_file_to_s3(
+        io.BytesIO(file_bytes),
+        f"{category}/{uuid4()}_{file.filename}"
+    )
 
     # Read file into DataFrame
     df = read_file_from_bytes(file_bytes, required_columns, category)
 
-    # Insert DB records
-    records = [DataModel(**{col: row[col] for col in required_columns}, group_id=group_id) for _, row in df.iterrows()]
+    # ==============================
+    # 🔥 DELETE OLD DATA (ONLY THIS CATEGORY)
+    # ==============================
+    db.query(DataModel).delete(synchronize_session=False)
+
+    # OR (FASTER OPTION IF TABLE IS LARGE)
+    # db.execute(text(f"TRUNCATE TABLE {DataModel.__tablename__} RESTART IDENTITY CASCADE"))
+
+    # ==============================
+    # INSERT NEW DATA
+    # ==============================
+    records = [
+        DataModel(
+            **{col: row[col] for col in required_columns},
+            group_id=group_id
+        )
+        for _, row in df.iterrows()
+    ]
+
+    # ==============================
+    # UPLOAD METADATA (KEEP SAFE)
+    # ==============================
     upload_row = UploadModel(
         group_id=group_id,
         upload_date=upload_date,
@@ -95,14 +120,18 @@ async def upload_file(
         file_path=s3_key
     )
 
+    # ==============================
+    # DB COMMIT
+    # ==============================
     db.add(upload_row)
     db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": f"{category} file uploaded successfully",
+        "message": f"{category} file uploaded successfully (data replaced)",
         "group_id": group_id,
-        "file_s3_url": get_s3_file_url(s3_key)
+        "file_s3_url": get_s3_file_url(s3_key),
+        "records_inserted": len(records)
     }
 
 # -------------------- LIST ALL UPLOADS --------------------

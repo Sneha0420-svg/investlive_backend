@@ -30,9 +30,6 @@ def get_db():
 def clean_nan(val):
     return None if isinstance(val, float) and math.isnan(val) else val
 
-# ==========================================================
-# Upload
-# ==========================================================
 @router.post("/upload/{category}")
 async def upload_file(
     category: str,
@@ -46,7 +43,6 @@ async def upload_file(
         raise HTTPException(400, "Category must be 'lm_rank' or 'lm_sub'")
 
     group_id = str(uuid4())
-
     contents = await file.read()
 
     # Upload to S3
@@ -65,6 +61,9 @@ async def upload_file(
 
         UploadModel = LMRankUpload
         DataModel = LMRank
+
+        # 🔥 DELETE OLD DATA FIRST
+        db.query(LMRank).delete(synchronize_session=False)
 
         if df.shape[1] != 20:
             raise HTTPException(400, "lm_rank file must have 20 columns")
@@ -117,6 +116,9 @@ async def upload_file(
         UploadModel = LMSubUpload
         DataModel = LMSub
 
+        # 🔥 DELETE OLD DATA FIRST
+        db.query(LMSub).delete(synchronize_session=False)
+
         if df.shape[1] > 11:
             df = df.iloc[:, 1:]
 
@@ -148,6 +150,7 @@ async def upload_file(
             for _, r in df.iterrows()
         ]
 
+    # Upload metadata
     upload_row = UploadModel(
         group_id=group_id,
         upload_date=upload_date,
@@ -157,15 +160,16 @@ async def upload_file(
         file_path=s3_key
     )
 
+    # 🔥 INSERT FRESH DATA
     db.add(upload_row)
     db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": f"{category} uploaded successfully",
+        "message": f"{category} uploaded successfully (old data cleared)",
         "group_id": group_id,
         "records": len(records),
-        "file_url": get_s3_file_url(s3_key)  # ✅ added
+        "file_url": get_s3_file_url(s3_key)
     }
 
 # ==========================================================

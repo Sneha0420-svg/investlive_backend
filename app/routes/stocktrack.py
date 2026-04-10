@@ -55,8 +55,8 @@ async def upload_stocktrack(
 
     df.columns = headers
 
-    # Delete existing data for same date
-    db.query(StockTrack).filter(StockTrack.mkt_date == mkt_date).delete()
+    # Delete existing data 
+    db.query(StockTrack).delete()
     db.commit()
 
     # Insert records

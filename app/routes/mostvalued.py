@@ -31,7 +31,6 @@ def get_db():
         db.close()
 
 
-# -------------------- UPLOAD FILES --------------------
 @router.post("/upload")
 async def upload_multiple_data(
     housefile: UploadFile = File(...),
@@ -52,6 +51,7 @@ async def upload_multiple_data(
         # Upload to S3
         s3_key = upload_file_to_s3(io.BytesIO(contents), "MostValuedHouse/Stock")
 
+        # Upload metadata (KEEP THIS SAFE)
         upload_record = MostValuedupload(
             name=name,
             upload_date=upload_date,
@@ -62,8 +62,7 @@ async def upload_multiple_data(
         )
 
         db.add(upload_record)
-        db.commit()
-        db.refresh(upload_record)
+        db.flush()  # IMPORTANT: avoid commit inside loop
         upload_ids.append(upload_record.id)
 
         # Read file
@@ -77,7 +76,7 @@ async def upload_multiple_data(
         except Exception as e:
             raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
 
-        # Remove 2nd column if needed (for stock files)
+        # Remove 2nd column if needed
         if ignore_second_col:
             df.drop(df.columns[1], axis=1, inplace=True)
 
@@ -87,7 +86,10 @@ async def upload_multiple_data(
                 "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
             )
 
-        df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
+        df.columns = [
+            "company", "day", "week", "month",
+            "quarter", "halfyear", "year", "threeyear"
+        ]
 
         for _, row in df.iterrows():
             all_records.append(
@@ -107,22 +109,28 @@ async def upload_multiple_data(
                 )
             )
 
-    # Process house file normally
+    # ==============================
+    # PROCESS BOTH FILES FIRST
+    # ==============================
     await process_file(housefile, name1)
-
-    # Process stock file (ignore 2nd column)
     await process_file(stockfile, name2, ignore_second_col=True)
 
+    # ==============================
+    # 🔥 TRUNCATE DATA TABLE ONLY
+    # ==============================
+    db.query(Mostvalued).delete(synchronize_session=False)
+
+    # ==============================
+    # INSERT FRESH DATA
+    # ==============================
     db.bulk_save_objects(all_records)
     db.commit()
 
     return {
-        "message": "Files uploaded successfully",
+        "message": "Upload successful (data table reset)",
         "upload_ids": upload_ids,
         "records_inserted": len(all_records)
     }
-
-
 # -------------------- LIST UPLOADS WITH PRESIGNED URL --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):

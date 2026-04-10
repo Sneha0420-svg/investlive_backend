@@ -72,6 +72,7 @@ def read_file_bytes(file_bytes: bytes, data_type: str):
 
 def generate_s3_key(data_type: str, filename: str):
     return f"volumetrade/{data_type}/{uuid4()}_{filename}"
+from sqlalchemy import text
 
 # -------------------- UPLOAD --------------------
 @router.post("/upload")
@@ -96,9 +97,12 @@ async def upload_volume_trade(
         file_bytes = await file.read()
 
         # Upload to S3
-        s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(data_type, file.filename))
+        s3_key = upload_file_to_s3(
+            io.BytesIO(file_bytes),
+            generate_s3_key(data_type, file.filename)
+        )
 
-        # Store upload info
+        # Store upload metadata (KEEP SAFE)
         upload_record = VolumeTradeUpload(
             group_id=group_id,
             upload_date=upload_date,
@@ -108,11 +112,11 @@ async def upload_volume_trade(
             file_path=s3_key
         )
         db.add(upload_record)
+        db.flush()  # important (avoid commit inside loop)
 
         # Read file data
         df = read_file_bytes(file_bytes, data_type)
 
-        # Prepare records
         for _, row in df.iterrows():
             all_records.append(
                 Model(
@@ -120,19 +124,37 @@ async def upload_volume_trade(
                     data_date=data_date,
                     **row.to_dict(),
                     group_id=group_id
-                   
                 )
             )
 
+    # ==============================
+    # 💣 DELETE OLD DATA FIRST
+    # ==============================
+    for data_type in set(data_types):
+        Model = TAB_MODEL_MAPPING[data_type]
+
+        # OPTION 1 (ORM delete)
+        db.query(Model).delete(synchronize_session=False)
+
+        # OPTION 2 (FASTER - recommended)
+        # db.execute(text(f"TRUNCATE TABLE {Model.__tablename__} RESTART IDENTITY CASCADE"))
+
+    # ==============================
+    # 🔥 INSERT NEW DATA
+    # ==============================
     db.bulk_save_objects(all_records)
     db.commit()
 
     return {
-        "message": "Files uploaded successfully",
+        "message": "Files uploaded successfully (data reset)",
         "group_id": group_id,
-        "file_urls": [get_s3_file_url(u.file_path) for u in db.query(VolumeTradeUpload).filter(VolumeTradeUpload.group_id==group_id).all()]
+        "file_urls": [
+            get_s3_file_url(u.file_path)
+            for u in db.query(VolumeTradeUpload)
+            .filter(VolumeTradeUpload.group_id == group_id)
+            .all()
+        ]
     }
-
 # -------------------- LATEST DATA --------------------
 @router.get("/latest")
 def get_latest(tab: str = "volume", db: Session = Depends(get_db)):

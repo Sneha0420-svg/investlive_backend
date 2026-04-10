@@ -38,6 +38,10 @@ def read_stockpulse_file(file_obj) -> pd.DataFrame:
 
 
 # -------------------- UPLOAD --------------------
+from sqlalchemy.exc import SQLAlchemyError
+
+from sqlalchemy.exc import SQLAlchemyError
+
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -46,116 +50,113 @@ async def upload_multiple_data(
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    all_records = []
     upload_ids = []
+    all_records = []
 
-    for file in files:
-        # Upload to S3
-        s3_key = upload_file_to_s3(file.file, f"stockpulse/{uuid4()}_{file.filename}")
+    date_cols = [
+        "wkhdt_52", "wkldt_52",
+        "wkhvdt_52", "wklvdt_52",
+        "myrhdt", "myrldt",
+        "myruhdt", "myruldt"
+    ]
 
-        # Save upload metadata
-        upload_record = StockPulseUpload(
-            upload_date=upload_date,
-            data_date=data_date,
-            data_type=data_type,
-            file_name=file.filename,
-            file_path=s3_key
-        )
-        db.add(upload_record)
-        db.commit()
-        db.refresh(upload_record)
-        upload_ids.append(upload_record.id)
+    try:
+        # 🔥 1. DELETE ALL OLD DATA (FULL RESET)
+        db.query(StockPulseData).delete(synchronize_session=False)
 
-        # Read file from S3
-        s3_file = get_file_stream_from_s3(s3_key)
-        df = read_stockpulse_file(s3_file)
+        for file in files:
 
-        # Drop unwanted column
-        df = df.drop(df.columns[31], axis=1)
-        if df.shape[1] != 32:
-            raise HTTPException(400, "Excel must have exactly 32 columns after cleanup")
-
-        # Assign column names
-        df.columns = [
-            "scrip_code", "scrip", "co_code", "isin", "fv", "cmp",
-            "dma_5", "dma_21", "dma_60", "dma_245",
-            "wkh_52", "wkhdt_52",
-            "wkl_52", "wkldt_52",
-            "cur_vol",
-            "dvma_5", "dvma_21", "dvma_60", "dvma_245",
-            "wkhv_52", "wkhvdt_52",
-            "wklv_52", "wklvdt_52",
-            "myrh", "myrhdt",
-            "myrl", "myrldt",
-            "myruh", "myruhdt",
-            "myrul", "myruldt",
-            "pulse_score"
-        ]
-        df = df.replace({np.nan: None, "nan": None, "NaN": None})
-
-        # Convert date columns
-        date_cols = [
-            "wkhdt_52", "wkldt_52",
-            "wkhvdt_52", "wklvdt_52",
-            "myrhdt", "myrldt",
-            "myruhdt", "myruldt"
-        ]
-        for col in date_cols:
-            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
-        df[date_cols] = df[date_cols].where(df[date_cols].notna(), None)
-
-        # Insert rows
-        for _, row in df.iterrows():
-            all_records.append(
-                StockPulseData(
-                    scrip_code=str(row["scrip_code"]),
-                    scrip=str(row["scrip"]),
-                    co_code=str(row["co_code"]),
-                    isin=str(row["isin"]),
-                    fv=row["fv"],
-                    cmp=row["cmp"],
-                    dma_5=row["dma_5"],
-                    dma_21=row["dma_21"],
-                    dma_60=row["dma_60"],
-                    dma_245=row["dma_245"],
-                    wkh_52=row["wkh_52"],
-                    wkhdt_52=row["wkhdt_52"],
-                    wkl_52=row["wkl_52"],
-                    wkldt_52=row["wkldt_52"],
-                    cur_vol=row["cur_vol"],
-                    dvma_5=row["dvma_5"],
-                    dvma_21=row["dvma_21"],
-                    dvma_60=row["dvma_60"],
-                    dvma_245=row["dvma_245"],
-                    wkhv_52=row["wkhv_52"],
-                    wkhvdt_52=row["wkhvdt_52"],
-                    wklv_52=row["wklv_52"],
-                    wklvdt_52=row["wklvdt_52"],
-                    myrh=row["myrh"],
-                    myrhdt=row["myrhdt"],
-                    myrl=row["myrl"],
-                    myrldt=row["myrldt"],
-                    myruh=row["myruh"],
-                    myruhdt=row["myruhdt"],
-                    myrul=row["myrul"],
-                    myruldt=row["myruldt"],
-                    pulse_score=row["pulse_score"],
-                    type=data_type,
-                    upload_date=upload_date,
-                    data_date=data_date
-                )
+            # ✅ Upload to S3
+            s3_key = upload_file_to_s3(
+                file.file,
+                f"stockpulse/{uuid4()}_{file.filename}"
             )
 
-    if all_records:
-        db.bulk_save_objects(all_records)
+            # ✅ Save metadata (keep history)
+            upload_record = StockPulseUpload(
+                upload_date=upload_date,
+                data_date=data_date,
+                data_type=data_type,
+                file_name=file.filename,
+                file_path=s3_key
+            )
+            db.add(upload_record)
+            db.flush()
+            upload_ids.append(upload_record.id)
+
+            # ✅ Read file
+            s3_file = get_file_stream_from_s3(s3_key)
+            df = read_stockpulse_file(s3_file)
+
+            # ✅ Validate structure
+            df = df.drop(df.columns[31], axis=1)
+            if df.shape[1] != 32:
+                raise HTTPException(400, "Excel must have exactly 32 columns")
+
+            # ✅ Assign column names
+            df.columns = [
+                "scrip_code", "scrip", "co_code", "isin", "fv", "cmp",
+                "dma_5", "dma_21", "dma_60", "dma_245",
+                "wkh_52", "wkhdt_52",
+                "wkl_52", "wkldt_52",
+                "cur_vol",
+                "dvma_5", "dvma_21", "dvma_60", "dvma_245",
+                "wkhv_52", "wkhvdt_52",
+                "wklv_52", "wklvdt_52",
+                "myrh", "myrhdt",
+                "myrl", "myrldt",
+                "myruh", "myruhdt",
+                "myrul", "myruldt",
+                "pulse_score"
+            ]
+
+            # ✅ Clean NaN
+            df = df.replace({np.nan: None})
+
+            # ✅ Remove duplicate ISIN inside file
+            df = df.drop_duplicates(subset=["isin"], keep="last")
+
+            # ✅ Convert date columns
+            for col in date_cols:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+
+            df[date_cols] = df[date_cols].where(df[date_cols].notna(), None)
+
+            if df.empty:
+                raise HTTPException(400, "Uploaded file is empty")
+
+            # ✅ Convert to dict (FAST)
+            records = df.to_dict(orient="records")
+
+            # ✅ Attach metadata
+            for r in records:
+                r.update({
+                    "type": data_type,
+                    "upload_date": upload_date,
+                    "data_date": data_date
+                })
+
+            all_records.extend(records)
+
+        # ✅ 2. BULK INSERT NEW DATA
+        if all_records:
+            db.bulk_insert_mappings(StockPulseData, all_records)
+
         db.commit()
 
-    return {
-        "message": "Files uploaded successfully",
-        "upload_ids": upload_ids,
-        "records_inserted": len(all_records)
-    }
+        return {
+            "message": "All old data deleted and replaced with new data",
+            "upload_ids": upload_ids,
+            "records_inserted": len(all_records)
+        }
 
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(500, f"Database error: {str(e)}")
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error: {str(e)}")
 
 
 # -------------------- LIST UPLOADS --------------------

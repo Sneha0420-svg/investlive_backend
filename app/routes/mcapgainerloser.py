@@ -82,7 +82,6 @@ CATEGORIES = {
 }
 
 
-# ---------------- Upload ----------------
 @router.post("/upload/{category}")
 async def upload_file(
     category: str,
@@ -133,6 +132,12 @@ async def upload_file(
             "COMPANY","ISIN","CMP","5DMA","21DMA","60DMA","245DMA","CH_PER"
         ]
 
+    # ==============================
+    # 🔥 FULL DELETE (NO CONDITIONS)
+    # ==============================
+    db.query(DataModel).delete(synchronize_session=False)
+    db.commit()
+
     # save upload record
     upload_record = UploadModel(
         group_id=str(uuid4()),
@@ -144,8 +149,7 @@ async def upload_file(
     )
 
     db.add(upload_record)
-    db.commit()
-    db.refresh(upload_record)
+    db.flush()  # safer than commit here
 
     # read dataframe
     try:
@@ -166,76 +170,73 @@ async def upload_file(
 
     df.columns = columns
 
-    # delete previous latest data if newer
-    latest_upload = (
-        db.query(UploadModel)
-        .order_by(UploadModel.data_date.desc())
-        .first()
-    )
-
-    if not latest_upload or data_date >= latest_upload.data_date:
-        db.query(DataModel).delete(synchronize_session=False)
-
     records = []
 
     for _, r in df.iterrows():
 
         if category == "mcap_movers":
 
-            record = DataModel(
-                COMPANY=r["COMPANY"],
-                ISIN=r["ISIN"],
-                CMP=r["CMP"],
-                MCAP_CR=r["MCAP_CR"],
-                CH_CR=r["CH_CR"],
-                CH_PER=r["CH_PER"],
-                VOL_NOS=r["VOL_NOS"],
-                VOL_CH_PER=r["VOL_CH_PER"],
-                DAY_HIGH=r["DAY_HIGH"],
-                DAY_LOW=r["DAY_LOW"],
-                DMA_60=r["60DMA"],
-                DMA_PER_60=r["60DMA_PER"],
-                DMA_245=r["245DMA"],
-                DMA_PER_245=r["245DMA_PER"],
-                WKH_52=r["52WKH"],
-                WKL_52=r["52WKL"],
-                group_id=upload_record.group_id
+            records.append(
+                DataModel(
+                    COMPANY=r["COMPANY"],
+                    ISIN=r["ISIN"],
+                    CMP=r["CMP"],
+                    MCAP_CR=r["MCAP_CR"],
+                    CH_CR=r["CH_CR"],
+                    CH_PER=r["CH_PER"],
+                    VOL_NOS=r["VOL_NOS"],
+                    VOL_CH_PER=r["VOL_CH_PER"],
+                    DAY_HIGH=r["DAY_HIGH"],
+                    DAY_LOW=r["DAY_LOW"],
+                    DMA_60=r["60DMA"],
+                    DMA_PER_60=r["60DMA_PER"],
+                    DMA_245=r["245DMA"],
+                    DMA_PER_245=r["245DMA_PER"],
+                    WKH_52=r["52WKH"],
+                    WKL_52=r["52WKL"],
+                    group_id=upload_record.group_id
+                )
             )
 
         elif category == "up_down_mobile":
 
-            record = DataModel(
-                COMPANY=r["COMPANY"],
-                ISIN=r["ISIN"],
-                CMP=r["CMP"],
-                START=r["START"],
-                DAYS=r["DAYS"],
-                CH_PER=r["CH_PER"],
-                PERDAY=r["PERDAY"],
-                group_id=upload_record.group_id
+            records.append(
+                DataModel(
+                    COMPANY=r["COMPANY"],
+                    ISIN=r["ISIN"],
+                    CMP=r["CMP"],
+                    START=r["START"],
+                    DAYS=r["DAYS"],
+                    CH_PER=r["CH_PER"],
+                    PERDAY=r["PERDAY"],
+                    group_id=upload_record.group_id
+                )
             )
 
         else:
 
-            record = DataModel(
-                COMPANY=r["COMPANY"],
-                ISIN=r["ISIN"],
-                CMP=r["CMP"],
-                DMA_5=r["5DMA"],
-                DMA_21=r["21DMA"],
-                DMA_60=r["60DMA"],
-                DMA_245=r["245DMA"],
-                CH_PER=r["CH_PER"],
-                group_id=upload_record.group_id
+            records.append(
+                DataModel(
+                    COMPANY=r["COMPANY"],
+                    ISIN=r["ISIN"],
+                    CMP=r["CMP"],
+                    DMA_5=r["5DMA"],
+                    DMA_21=r["21DMA"],
+                    DMA_60=r["60DMA"],
+                    DMA_245=r["245DMA"],
+                    CH_PER=r["CH_PER"],
+                    group_id=upload_record.group_id
+                )
             )
 
-        records.append(record)
-
+    # ==============================
+    # INSERT FRESH DATA
+    # ==============================
     db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": f"{category} uploaded successfully",
+        "message": f"{category} uploaded successfully (old data cleared)",
         "records_inserted": len(records),
         "upload_id": upload_record.id
     }

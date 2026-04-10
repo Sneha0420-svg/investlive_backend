@@ -90,6 +90,8 @@ def read_csv_safe(file_stream, expected_columns=None):
 
     return df
 
+from sqlalchemy.exc import SQLAlchemyError
+
 # ---------------- Upload API ----------------
 @router.post("/upload/")
 async def upload_file(
@@ -114,7 +116,7 @@ async def upload_file(
 
     df = read_csv_safe(file_like, expected_columns)
 
-    # 🔥 CRITICAL FIX: remove NaN properly
+    # 🔥 Fix NaN
     df = df.astype(object).where(pd.notnull(df), None)
 
     # Upload to S3
@@ -140,7 +142,7 @@ async def upload_file(
     model_columns = set(Model.__table__.columns.keys())
     objects = []
 
-    # 🔥 FINAL SAFE INSERT LOOP
+    # ---------- Prepare data ----------
     for _, row in df.iterrows():
         record = {}
 
@@ -152,13 +154,11 @@ async def upload_file(
 
             if pd.isna(val):
                 val = None
-
             elif isinstance(val, float):
                 if math.isnan(val):
                     val = None
                 elif val.is_integer():
                     val = int(val)
-
             elif isinstance(val, str):
                 val = val.strip()
 
@@ -171,10 +171,17 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="No valid rows")
 
     try:
+        # 🔥🔥🔥 IMPORTANT CHANGE 🔥🔥🔥
+        # DELETE ALL OLD DATA
+        db.query(Model).delete(synchronize_session=False)
+
+        # Insert new data
         db.add(upload_entry)
         db.flush()
         db.bulk_save_objects(objects)
+
         db.commit()
+
     except SQLAlchemyError as e:
         db.rollback()
         delete_file_from_s3(s3_key)

@@ -32,8 +32,6 @@ def get_db():
     finally:
         db.close()
 
-
-# -------------------- UPLOAD FILES --------------------
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -45,88 +43,97 @@ async def upload_multiple_data(
     all_records = []
     upload_ids = []
 
-    for file in files:
+    try:
+        for file in files:
 
-        contents = await file.read()
-        s3_stream = io.BytesIO(contents)
+            contents = await file.read()
+            s3_stream = io.BytesIO(contents)
 
-        # Upload file to S3
-        s3_key = upload_file_to_s3(s3_stream, "indstocktrend")
-        file_stream = io.BytesIO(contents)
-        upload_record = Indstocktrendupload(
-            upload_date=upload_date,
-            data_date=data_date,
-            data_type=data_type,
-            file_name=file.filename,
-            file_path=s3_key
-        )
+            # Upload file to S3
+            s3_key = upload_file_to_s3(s3_stream, "indstocktrend")
 
-        db.add(upload_record)
-        db.commit()
-        db.refresh(upload_record)
+            file_stream = io.BytesIO(contents)
 
-        upload_ids.append(upload_record.id)
-
-        file_stream.seek(0)
-
-        # Read file
-        try:
-            if file.filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_stream, header=None)
-            elif file.filename.endswith(".csv"):
-                df = pd.read_csv(file_stream, header=None)
-            else:
-                raise HTTPException(400, "Invalid file type")
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file: {e}")
-
-        if df.shape[1] != 8:
-            raise HTTPException(
-                400,
-                "Excel must have exactly 8 columns: Metric, Count, Day, Week, Month, Quarter, Halfyear, Year"
+            # Save upload metadata
+            upload_record = Indstocktrendupload(
+                upload_date=upload_date,
+                data_date=data_date,
+                data_type=data_type,
+                file_name=file.filename,
+                file_path=s3_key
             )
 
-        df.columns = [
-            "description",
-            "count",
-            "day",
-            "week",
-            "month",
-            "quarter",
-            "halfyear",
-            "year"
-        ]
+            db.add(upload_record)
+            db.flush()  # safer than commit inside loop
+            upload_ids.append(upload_record.id)
 
-        for _, row in df.iterrows():
-            all_records.append(
-                InstockTrendData(
-                    description=str(row["description"]),
-                    count=str(row["count"]),
-                    day=str(row["day"]),
-                    week=str(row["week"]),
-                    month=str(row["month"]),
-                    quarter=str(row["quarter"]),
-                    halfyear=str(row["halfyear"]),
-                    year=str(row["year"]),
-                    type=data_type,
-                    upload_date=upload_date,
-                    data_date=data_date
+            file_stream.seek(0)
+
+            # Read file
+            try:
+                if file.filename.endswith((".xlsx", ".xls")):
+                    df = pd.read_excel(file_stream, header=None)
+                elif file.filename.endswith(".csv"):
+                    df = pd.read_csv(file_stream, header=None)
+                else:
+                    raise HTTPException(400, "Invalid file type")
+            except Exception as e:
+                raise HTTPException(400, f"Failed to read file: {e}")
+
+            if df.shape[1] != 8:
+                raise HTTPException(
+                    400,
+                    "Excel must have exactly 8 columns: Metric, Count, Day, Week, Month, Quarter, Halfyear, Year"
                 )
-            )
 
-    if not all_records:
-        raise HTTPException(400, "No valid data found")
+            df.columns = [
+                "description",
+                "count",
+                "day",
+                "week",
+                "month",
+                "quarter",
+                "halfyear",
+                "year"
+            ]
 
-    db.bulk_save_objects(all_records)
-    db.commit()
+            for _, row in df.iterrows():
+                all_records.append(
+                    InstockTrendData(
+                        description=str(row["description"]),
+                        count=str(row["count"]),
+                        day=str(row["day"]),
+                        week=str(row["week"]),
+                        month=str(row["month"]),
+                        quarter=str(row["quarter"]),
+                        halfyear=str(row["halfyear"]),
+                        year=str(row["year"]),
+                        type=data_type,
+                        upload_date=upload_date,
+                        data_date=data_date
+                    )
+                )
 
-    return {
-        "message": "Files uploaded successfully",
-        "upload_ids": upload_ids,
-        "records_inserted": len(all_records)
-    }
+        if not all_records:
+            raise HTTPException(400, "No valid data found")
 
+        # 🔥🔥🔥 IMPORTANT CHANGE: DELETE OLD DATA FIRST
+        db.query(InstockTrendData).delete(synchronize_session=False)
 
+        # Insert new data
+        db.bulk_save_objects(all_records)
+        db.commit()
+
+        return {
+            "message": "Old data deleted and new data inserted successfully",
+            "upload_ids": upload_ids,
+            "records_inserted": len(all_records)
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error: {str(e)}")
+    
 # -------------------- GET ALL UPLOADS --------------------
 @router.get("/uploads/", response_model=List[dict])
 def get_uploads(db: Session = Depends(get_db)):
