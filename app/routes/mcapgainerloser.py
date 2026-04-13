@@ -194,7 +194,6 @@ async def upload_file(
                     DMA_PER_245=r["245DMA_PER"],
                     WKH_52=r["52WKH"],
                     WKL_52=r["52WKL"],
-                    group_id=upload_record.group_id
                 )
             )
 
@@ -209,7 +208,6 @@ async def upload_file(
                     DAYS=r["DAYS"],
                     CH_PER=r["CH_PER"],
                     PERDAY=r["PERDAY"],
-                    group_id=upload_record.group_id
                 )
             )
 
@@ -225,7 +223,6 @@ async def upload_file(
                     DMA_60=r["60DMA"],
                     DMA_245=r["245DMA"],
                     CH_PER=r["CH_PER"],
-                    group_id=upload_record.group_id
                 )
             )
 
@@ -268,75 +265,55 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 
 
 # ---------------- Latest Data ----------------
-
 @router.get("/latest/{category}")
-def get_latest_data(category: str, db: Session = Depends(get_db)):
+def get_all_data(category: str, db: Session = Depends(get_db)):
 
     validate_category(category)
 
-    UploadModel = CATEGORIES[category]["upload"]
     DataModel = CATEGORIES[category]["data"]
 
-    latest_upload = (
-        db.query(UploadModel)
-        .order_by(UploadModel.data_date.desc())
-        .first()
-    )
+    rows = db.query(DataModel).all()
 
-    if not latest_upload:
-        return {"latest_data_date": None, "records": [], "count": 0}
-
-    rows = db.query(DataModel).filter(
-        DataModel.group_id == latest_upload.group_id
-    ).all()
+    if not rows:
+        return {"records": [], "count": 0}
 
     records = []
-
     for r in rows:
         row = r.__dict__.copy()
         row.pop("_sa_instance_state", None)
         records.append(row)
 
     return {
-        "latest_data_date": latest_upload.data_date,
         "records": records,
         "count": len(records)
     }
+    
+
 @router.get("/count/ch_per/{category}")
 def get_counts_by_ch_per(category: str, db: Session = Depends(get_db)):
 
     if category not in ["up_down_mobile", "up_down_trend"]:
         raise HTTPException(
-            400,
-            "Category must be 'up_down_mobile' or 'up_down_trend'"
+            status_code=400,
+            detail="Category must be 'up_down_mobile' or 'up_down_trend'"
         )
 
-    UploadModel = CATEGORIES[category]["upload"]
     DataModel = CATEGORIES[category]["data"]
 
-    latest_upload = (
-        db.query(UploadModel)
-        .order_by(UploadModel.data_date.desc())
-        .first()
-    )
+    rows = db.query(DataModel).all()
 
-    if not latest_upload:
+    if not rows:
         return {
-            "latest_data_date": None,
             "total_count": 0,
             "up_count": 0,
             "down_count": 0
         }
 
-    rows = db.query(DataModel).filter(
-        DataModel.group_id == latest_upload.group_id
-    ).all()
-
     # count based on CH_PER
     up_count = len([r for r in rows if getattr(r, "CH_PER", 0) > 0])
     down_count = len([r for r in rows if getattr(r, "CH_PER", 0) < 0])
 
-    # assign meaningful labels
+    # labels
     if category == "up_down_mobile":
         up_label = "up_wardly_mobile"
         down_label = "downhillpath"
@@ -345,11 +322,12 @@ def get_counts_by_ch_per(category: str, db: Session = Depends(get_db)):
         down_label = "down_trend"
 
     return {
-        "latest_data_date": latest_upload.data_date,
         "total_count": len(rows),
         up_label: up_count,
         down_label: down_count
     }
+    
+
 # ---------------- Download File ----------------
 
 @router.get("/download/{category}/{group_id}")
@@ -462,9 +440,7 @@ async def update_upload(
         df.columns = columns
 
         # delete old records for this upload
-        db.query(DataModel).filter(
-            DataModel.group_id == group_id
-        ).delete(synchronize_session=False)
+        db.query(DataModel).delete(synchronize_session=False)
 
         records = []
 
@@ -488,7 +464,6 @@ async def update_upload(
                     DMA_PER_245=r["245DMA_PER"],
                     WKH_52=r["52WKH"],
                     WKL_52=r["52WKL"],
-                    group_id=group_id
                 )
 
             elif category == "up_down_mobile":
@@ -500,7 +475,6 @@ async def update_upload(
                     DAYS=r["DAYS"],
                     CH_PER=r["CH_PER"],
                     PERDAY=r["PERDAY"],
-                    group_id=group_id
                 )
 
             else:
@@ -513,7 +487,6 @@ async def update_upload(
                     DMA_60=r["60DMA"],
                     DMA_245=r["245DMA"],
                     CH_PER=r["CH_PER"],
-                    group_id=group_id
                 )
 
             records.append(record)
@@ -527,13 +500,8 @@ async def update_upload(
         "group_id": group_id
     }
 # ---------------- Delete Upload ----------------
-
 @router.delete("/upload/{category}/{group_id}")
-def delete_file_upload(
-    category: str,
-    group_id: str,
-    db: Session = Depends(get_db)
-):
+def delete_file_upload(category: str, group_id: str, db: Session = Depends(get_db)):
 
     validate_category(category)
 
@@ -547,12 +515,14 @@ def delete_file_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    db.query(DataModel).filter(
-        DataModel.group_id == group_id
-    ).delete(synchronize_session=False)
+    # delete all data (no group mapping)
+    db.query(DataModel).delete()
 
-    delete_file_from_s3(upload.file_path)
+    # delete file from S3
+    if upload.file_path:
+        delete_file_from_s3(upload.file_path)
 
+    # delete upload record
     db.delete(upload)
 
     db.commit()

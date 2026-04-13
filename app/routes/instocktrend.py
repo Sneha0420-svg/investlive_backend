@@ -108,9 +108,7 @@ async def upload_multiple_data(
                         quarter=str(row["quarter"]),
                         halfyear=str(row["halfyear"]),
                         year=str(row["year"]),
-                        type=data_type,
-                        upload_date=upload_date,
-                        data_date=data_date
+                       
                     )
                 )
 
@@ -182,29 +180,14 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
 
 # -------------------- GET LATEST DATA --------------------
 @router.get("/stockdata/", response_model=Dict[str, Any])
-def get_latest_stock_data(db: Session = Depends(get_db)):
+def get_stock_data(db: Session = Depends(get_db)):
 
-    latest = db.query(Indstocktrendupload).order_by(
-        desc(Indstocktrendupload.upload_date),
-        desc(Indstocktrendupload.data_date)
-    ).first()
-
-    if not latest:
-        raise HTTPException(404, "No uploads found")
-
-    stocks = db.query(InstockTrendData).filter(
-        InstockTrendData.upload_date == latest.upload_date,
-        InstockTrendData.data_date == latest.data_date,
-        InstockTrendData.type == latest.data_type
-    ).order_by(InstockTrendData.id).all()
+    stocks = db.query(InstockTrendData).order_by(InstockTrendData.id).all()
 
     if not stocks:
-        raise HTTPException(404, "No stock data found")
+        raise HTTPException(status_code=404, detail="No stock data found")
 
     return {
-        "upload_date": latest.upload_date,
-        "data_date": latest.data_date,
-        "type": latest.data_type,
         "stocks": [
             {
                 "id": s.id,
@@ -221,7 +204,6 @@ def get_latest_stock_data(db: Session = Depends(get_db)):
         ]
     }
 
-
 # -------------------- DELETE UPLOAD --------------------
 @router.delete("/uploads/{upload_id}")
 def delete_upload(upload_id: int, db: Session = Depends(get_db)):
@@ -233,12 +215,6 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    deleted_rows = db.query(InstockTrendData).filter(
-        InstockTrendData.upload_date == upload.upload_date,
-        InstockTrendData.data_date == upload.data_date,
-        InstockTrendData.type == upload.data_type
-    ).delete(synchronize_session=False)
-
     delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
@@ -247,7 +223,6 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
     return {
         "message": "Upload deleted successfully",
         "upload_id": upload_id,
-        "rows_deleted": deleted_rows
     }
 
 
@@ -268,34 +243,37 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
+    # -----------------------------
+    # 1. Update metadata FIRST
+    # -----------------------------
     if upload_date:
         upload.upload_date = upload_date
-
     if data_date:
         upload.data_date = data_date
 
     new_records = []
 
+    # -----------------------------
+    # 2. If file uploaded → replace data
+    # -----------------------------
     if file:
 
-        delete_file_from_s3(upload.file_path)
+        # delete old file from S3
+        if upload.file_path:
+            delete_file_from_s3(upload.file_path)
 
         contents = await file.read()
         file_like = io.BytesIO(contents)
 
+        # upload new file
         s3_key = upload_file_to_s3(file_like, "indstocktrend")
 
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        db.query(InstockTrendData).filter(
-            InstockTrendData.upload_date == upload.upload_date,
-            InstockTrendData.data_date == upload.data_date,
-            InstockTrendData.type == upload.data_type
-        ).delete(synchronize_session=False)
-
         file_like.seek(0)
 
+        # read file
         if file.filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(file_like, header=None)
         else:
@@ -315,22 +293,27 @@ async def update_upload(
             "year"
         ]
 
-        new_records = [
-            InstockTrendData(
-                description=str(row["description"]),
-                count=str(row["count"]),
-                day=str(row["day"]),
-                week=str(row["week"]),
-                month=str(row["month"]),
-                quarter=str(row["quarter"]),
-                halfyear=str(row["halfyear"]),
-                year=str(row["year"]),
-                type=upload.data_type,
-                upload_date=upload.upload_date,
-                data_date=upload.data_date
+        # -----------------------------------
+        # 3. DELETE OLD DATA (FIXED VERSION)
+        # -----------------------------------
+        db.query(InstockTrendData).delete(synchronize_session=False)
+
+        # -----------------------------------
+        # 4. INSERT NEW DATA
+        # -----------------------------------
+        for _, row in df.iterrows():
+            new_records.append(
+                InstockTrendData(
+                    description=str(row["description"]),
+                    count=row["count"],
+                    day=row["day"],
+                    week=row["week"],
+                    month=row["month"],
+                    quarter=row["quarter"],
+                    halfyear=row["halfyear"],
+                    year=row["year"],
+                )
             )
-            for _, row in df.iterrows()
-        ]
 
         db.bulk_save_objects(new_records)
 

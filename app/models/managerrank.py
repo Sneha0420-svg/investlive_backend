@@ -36,7 +36,6 @@ class LMRank(Base):
     cur_gain_per = Column("CUR_GAIN_PER", DECIMAL(20, 1), nullable=False)
     
     consol_rnk = Column("CONSOL_RNK", DECIMAL(20, 0), nullable=False)
-    group_id = Column(String(36), nullable=False, index=True) 
 
 # --------------------------------------------------
 # Lead Manager Subscription Table
@@ -56,7 +55,6 @@ class LMSub(Base):
     cur_val = Column("CUR_VAL", DECIMAL(20, 2), nullable=False)
     gain_val = Column("GAIN_VAL", DECIMAL(20, 2), nullable=False)
     gain_perc = Column("GAIN_PERC", DECIMAL(10, 1), nullable=False)
-    group_id = Column(String(36), nullable=False, index=True) 
 
 from sqlalchemy import Column, Integer, String, Date
 from app.database import Base

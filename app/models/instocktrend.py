@@ -14,9 +14,6 @@ class InstockTrendData(Base):
     quarter = Column(Float)
     halfyear = Column(Float)
     year = Column(Float)
-    upload_date = Column(Date, nullable=False)  # new
-    data_date = Column(Date, nullable=False)    # new
-    type = Column(String, nullable=False)
 class Indstocktrendupload(Base):
     __tablename__ = "indstocktrend_uploads"
 

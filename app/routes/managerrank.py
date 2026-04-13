@@ -103,7 +103,6 @@ async def upload_file(
                 curr_value=clean_nan(r["CURR_VALUE"]),
                 cur_gain_per=clean_nan(r["CUR_GAIN_PER"]),
                 consol_rnk=clean_nan(r["CONSOL_RNK"]),
-                group_id=group_id
             )
             for _, r in df.iterrows()
         ]
@@ -145,7 +144,6 @@ async def upload_file(
                 cur_val=clean_nan(r["CUR_VAL"]),
                 gain_val=clean_nan(r["GAIN_VAL"]),
                 gain_perc=clean_nan(r["GAIN_PERC"]),
-                group_id=group_id
             )
             for _, r in df.iterrows()
         ]
@@ -167,7 +165,6 @@ async def upload_file(
 
     return {
         "message": f"{category} uploaded successfully (old data cleared)",
-        "group_id": group_id,
         "records": len(records),
         "file_url": get_s3_file_url(s3_key)
     }
@@ -202,17 +199,19 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 # Get Latest Data
 # ==========================================================
 @router.get("/latest/{category}")
-def get_latest_data(category: str, db: Session = Depends(get_db)):
+def get_all_data(category: str, db: Session = Depends(get_db)):
 
-    UploadModel = LMRankUpload if category == "lm_rank" else LMSubUpload
-    DataModel = LMRank if category == "lm_rank" else LMSub
+    if category == "lm_rank":
+        DataModel = LMRank
+    elif category == "lm_sub":
+        DataModel = LMSub
+    else:
+        raise HTTPException(status_code=400, detail="Invalid category")
 
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
+    data = db.query(DataModel).all()
 
-    if not latest_upload:
-        raise HTTPException(404, "No upload found")
-
-    data = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
+    if not data:
+        raise HTTPException(status_code=404, detail="No data found")
 
     return data
 
@@ -322,7 +321,7 @@ def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Upload not found")
 
     # Delete associated data
-    db.query(DataModel).filter(DataModel.group_id == group_id).delete()
+    db.query(DataModel).delete()
 
     # Delete S3 file
     delete_file_from_s3(upload.file_path)

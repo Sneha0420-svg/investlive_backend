@@ -45,10 +45,10 @@ from app.routes.volumemoving import router as volumemoving_router
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-    docs_url=None,          # disable default docs
-    redoc_url=None,         # disable default redoc
-    openapi_url="/openapi.json",
-    root_path="/api"
+    # docs_url=None,          # disable default docs
+    # redoc_url=None,         # disable default redoc
+    # openapi_url="/openapi.json",
+    # root_path="/api"
 )
 
 # =========================

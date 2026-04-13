@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import date
 
 class StockPulseDataSchema(BaseModel):
@@ -42,12 +42,9 @@ class StockPulseDataSchema(BaseModel):
     myruldt: Optional[date] = None
 
     pulse_score: Optional[float] = None
+    model_config = ConfigDict(from_attributes=True)
 
-    data_date: date
-    type: str
-
-    class Config:
-        orm_mode = True
+    
 
 class StockPulseUploadSchema(BaseModel):
     id: int
@@ -58,7 +55,4 @@ class StockPulseUploadSchema(BaseModel):
     file_link: str
 
 class StockPulseLatestResponse(BaseModel):
-    upload_date: date
-    data_date: date
-    type: str
     records: List[StockPulseDataSchema]

@@ -137,7 +137,6 @@ async def upload_new_high_low(
                 WKL_52=clean_nan(row["52WKL"]),
                 CH_RS=clean_nan(row["CH_RS"]),
                 CH_PER=clean_nan(row["CH_PER"]),
-                group_id=group_id
             ))
 
         elif category == "circuit":
@@ -153,7 +152,6 @@ async def upload_new_high_low(
                 WKH_DT_52=str(row["52WKHDT"]),
                 WKL_52=clean_nan(row["52WKL"]),
                 WKL_DT_52=str(row["52WKLDT"]),
-                group_id=group_id
             ))
 
         else:  # multi-year
@@ -169,7 +167,6 @@ async def upload_new_high_low(
                 SINCE=str(row["SINCE"]),
                 TYPE=int(row["TYPE"]),
                 ID=int(row["ID"]),
-                group_id=group_id
             ))
 
     # ✅ Insert new data
@@ -209,27 +206,22 @@ def get_new_high_low_uploads(category: str, db: Session = Depends(get_db)):
 @router.get("/latest/{category}")
 def get_latest_data_new_high_low(category: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _, _ = get_models(category)
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest_upload:
-        return {"message": "No uploads found", "records": []}
+   
 
-    data_rows = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
+    data_rows = db.query(DataModel).all()
     result = [row.__dict__ for row in data_rows]
     for r in result:
         r.pop("_sa_instance_state", None)
-    return {"latest_data_date": latest_upload.data_date, "records": result, "count": len(result)}
+    return { "records": result, "count": len(result)}
 # -------------------- HIGH / LOW COUNT (fixed for all categories including multi-year TYPE) --------------------
 @router.get("/{category}/high-low/count")
 def get_high_low_count(category: str, db: Session = Depends(get_db)):
     DataModel, UploadModel, _, _ = get_models(category)
 
-    # Get latest upload
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest_upload:
-        return {"message": "No uploads found", "high_count": 0, "low_count": 0, "total_records": 0}
+   
 
     # Query latest data
-    data_rows = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
+    data_rows = db.query(DataModel).all()
 
     high_count = 0
     low_count = 0
@@ -252,13 +244,10 @@ def get_high_low_count(category: str, db: Session = Depends(get_db)):
                     low_count += 1
 
     return {
-        "latest_data_date": latest_upload.data_date,
         "high_count": high_count,
         "low_count": low_count,
         "total_records": len(data_rows)
     }
-# -------------------- DOWNLOAD --------------------
-
 # -------------------- DOWNLOAD FILE ROUTE --------------------
 @router.get("/download/{category}/{group_id}")
 def download_new_high_low_file(category: str, group_id: str, db: Session = Depends(get_db)):
@@ -293,96 +282,53 @@ async def update_new_high_low_upload(
     db: Session = Depends(get_db)
 ):
     DataModel, UploadModel, expected_cols, columns = get_models(category)
-    
-    # Fetch existing upload
-    upload = db.query(UploadModel).filter(UploadModel.group_id == group_id).first()
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.group_id == group_id
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Update metadata
     if upload_date:
         upload.upload_date = upload_date
     if data_date:
         upload.data_date = data_date
 
-    # If new file is provided
-    if file:
-        # Delete old S3 file
-        if upload.file_path:
-            delete_file_from_s3(upload.file_path)
+    new_records = []
 
-        # Upload new file
+    if file:
+        delete_file_from_s3(upload.file_path)
+
         file_bytes = await file.read()
-        s3_key = upload_file_to_s3(io.BytesIO(file_bytes), generate_s3_key(category, file.filename))
+
+        s3_key = upload_file_to_s3(
+            io.BytesIO(file_bytes),
+            generate_s3_key(category, file.filename)
+        )
+
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Read new data
+        # ✅ clear old data safely
+        db.query(DataModel).delete(synchronize_session=False)
+
         df = read_file_bytes(file_bytes, expected_cols, columns, category)
-        df = df.drop_duplicates(subset=["ISIN"])  # Drop duplicates in file
+        df = df.drop_duplicates(subset=["ISIN"])
 
-        # Prepare upsert records
-        records = []
-        for _, row in df.iterrows():
-            if category == "52-week":
-                records.append({
-                    "COMPANY": clean_nan(row["COMPANY"]),
-                    "ISIN": row["ISIN"],
-                    "CMP": clean_nan(row["CMP"]),
-                    "WKH_52": clean_nan(row["52WKH"]),
-                    "WKL_52": clean_nan(row["52WKL"]),
-                    "CH_RS": clean_nan(row["CH_RS"]),
-                    "CH_PER": clean_nan(row["CH_PER"]),
-                    "group_id": group_id
-                })
-            elif category == "circuit":
-                records.append({
-                    "COMPANY": clean_nan(row["COMPANY"]),
-                    "ISIN": row["ISIN"],
-                    "CMP": clean_nan(row["CMP"]),
-                    "CH_PER": clean_nan(row["CH_PER"]),
-                    "VOL": row["VOL"],
-                    "VALUE": row["VALUE"],
-                    "TRADE": row["TRADE"],
-                    "WKH_52": clean_nan(row["52WKH"]),
-                    "WKH_DT_52": str(row["52WKHDT"]),
-                    "WKL_52": clean_nan(row["52WKL"]),
-                    "WKL_DT_52": str(row["52WKLDT"]),
-                    "group_id": group_id
-                })
-            else:  # multi-year
-                records.append({
-                    "COMPANY": clean_nan(row["COMPANY"]),
-                    "ISIN": row["ISIN"],
-                    "MCAP": clean_nan(row["MCAP"]),
-                    "CMP": clean_nan(row["CMP"]),
-                    "MYRH": clean_nan(row["MYRH"]),
-                    "MYRH_DT": str(row["MYRH_DT"]),
-                    "MYRL": clean_nan(row["MYRL"]),
-                    "MYRL_DT": str(row["MYRL_DT"]),
-                    "SINCE": str(row["SINCE"]),
-                    "TYPE": int(row["TYPE"]),
-                    "ID": int(row["ID"]),
-                    "group_id": group_id
-                })
+        new_records = [
+            DataModel(**{col: row[col] for col in columns})
+            for _, row in df.iterrows()
+        ]
 
-        # Perform upsert
-        if records:
-            stmt = insert(DataModel).values(records)
-            primary_key_col = "ISIN"
-            update_cols = {c.name: c for c in stmt.excluded if c.name != primary_key_col}
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[primary_key_col],
-                set_=update_cols
-            )
-            try:
-                db.execute(stmt)
-            except Exception as e:
-                db.rollback()
-                raise HTTPException(500, f"Failed to update records: {str(e)}")
+        db.bulk_save_objects(new_records)
 
     db.commit()
-    return {"message": "Upload updated successfully", "group_id": group_id}
+
+    return {
+        "message": "Upload updated successfully",
+        "records_inserted": len(new_records)
+    }
 
 # -------------------- DELETE --------------------
 @router.delete("/upload/{category}/{group_id}")
@@ -392,8 +338,7 @@ def delete_new_high_low_upload(category: str, group_id: str, db: Session = Depen
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # delete data
-    db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
+   
 
     # delete S3 file
     if upload.file_path:

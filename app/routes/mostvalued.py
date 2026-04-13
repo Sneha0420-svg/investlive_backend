@@ -1,5 +1,6 @@
 import io
 from datetime import date
+from uuid import uuid4
 from typing import List, Dict, Any
 
 import pandas as pd
@@ -9,7 +10,13 @@ from sqlalchemy import desc
 from fastapi.responses import StreamingResponse
 
 from app.database import SessionLocal
-from app.models.mostvalued import Mostvalued, MostValuedupload
+from app.models.mostvalued import (
+    MostValuedStock,
+    MostValuedHouses,
+    MostValuedStockUpload,
+    MostValuedHousesUpload
+)
+
 from app.s3_utils import (
     upload_file_to_s3,
     delete_file_from_s3,
@@ -17,12 +24,10 @@ from app.s3_utils import (
     get_file_stream_from_s3
 )
 
-router = APIRouter(
-    prefix="/mostvalued",
-    tags=["MostValuedHouseStocks"]
-)
+router = APIRouter(prefix="/mostvalued", tags=["Most Valued"])
 
-# -------------------- DB DEPENDENCY --------------------
+
+# ---------------- DB ----------------
 def get_db():
     db = SessionLocal()
     try:
@@ -31,345 +36,350 @@ def get_db():
         db.close()
 
 
-@router.post("/upload")
-async def upload_multiple_data(
-    housefile: UploadFile = File(...),
-    stockfile: UploadFile = File(...),
-    name1: str = Form(...),
-    name2: str = Form(...),
+# ---------------- Helpers ----------------
+def get_models(category: str):
+    if category == "stock":
+        return MostValuedStock, MostValuedStockUpload, "stock"
+    elif category == "house":
+        return MostValuedHouses, MostValuedHousesUpload, "house"
+    else:
+        raise HTTPException(400, "Category must be 'stock' or 'house'")
+
+
+def read_file(file_bytes: bytes, expected_cols: int, columns: list):
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+    except Exception:
+        df = pd.read_csv(io.StringIO(file_bytes.decode("utf-8")), header=None)
+
+    if df.shape[1] != expected_cols:
+        raise HTTPException(400, f"File must have {expected_cols} columns")
+
+    df.columns = columns
+    return df
+
+
+# ==========================================================
+# UPLOAD (SNAPSHOT REPLACE)
+# ==========================================================
+@router.post("/upload/{category}")
+async def upload_data(
+    category: str,
     upload_date: date = Form(...),
     data_date: date = Form(...),
-    data_type: str = Form(...),
+    file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    all_records = []
-    upload_ids = []
 
-    async def process_file(file: UploadFile, name: str, ignore_second_col: bool = False):
-        contents = await file.read()
+    DataModel, UploadModel, cat = get_models(category)
 
-        # Upload to S3
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "MostValuedHouse/Stock")
+    file_bytes = await file.read()
 
-        # Upload metadata (KEEP THIS SAFE)
-        upload_record = MostValuedupload(
-            name=name,
-            upload_date=upload_date,
-            data_date=data_date,
-            data_type=data_type,
-            file_name=file.filename,
-            file_path=s3_key
-        )
+    # Upload file to S3
+    s3_key = upload_file_to_s3(
+        io.BytesIO(file_bytes),
+        f"mostvalued/{category}/{uuid4()}_{file.filename}"
+    )
 
-        db.add(upload_record)
-        db.flush()  # IMPORTANT: avoid commit inside loop
-        upload_ids.append(upload_record.id)
-
-        # Read file
-        try:
-            if file.filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(contents), header=None)
-            elif file.filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
-            else:
-                raise HTTPException(400, "Invalid file type")
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file {file.filename}: {e}")
-
-        # Remove 2nd column if needed
-        if ignore_second_col:
-            df.drop(df.columns[1], axis=1, inplace=True)
-
-        if df.shape[1] != 8:
-            raise HTTPException(
-                400,
-                "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
-            )
-
-        df.columns = [
-            "company", "day", "week", "month",
-            "quarter", "halfyear", "year", "threeyear"
+    # Read file structure
+    if category == "stock":
+        columns = [
+            "company", "isin", "today", "p_day", "p_wk",
+            "p_mth", "p_qtr", "p_hy", "p_yr"
+        ]
+    else:
+        columns = [
+            "house", "today", "p_day", "p_wk",
+            "p_mth", "p_qtr", "p_hy", "p_yr"
         ]
 
-        for _, row in df.iterrows():
-            all_records.append(
-                Mostvalued(
-                    name=name,
+    df = read_file(file_bytes, len(columns), columns)
+
+    # =========================
+    # SNAPSHOT DELETE
+    # =========================
+    db.query(DataModel).delete()
+
+    # =========================
+    # INSERT DATA
+    # =========================
+    records = []
+    for _, row in df.iterrows():
+
+        if category == "stock":
+            records.append(
+                MostValuedStock(
                     company=row["company"],
-                    day=float(row["day"]),
-                    week=float(row["week"]),
-                    month=float(row["month"]),
-                    quarter=float(row["quarter"]),
-                    halfyear=float(row["halfyear"]),
-                    year=float(row["year"]),
-                    threeyear=float(row["threeyear"]),
-                    upload_date=upload_date,
-                    data_date=data_date,
-                    type=data_type
+                    isin=row["isin"],
+                    today=row["today"],
+                    p_day=row["p_day"],
+                    p_wk=row["p_wk"],
+                    p_mth=row["p_mth"],
+                    p_qtr=row["p_qtr"],
+                    p_hy=row["p_hy"],
+                    p_yr=row["p_yr"]
+                )
+            )
+        else:
+            records.append(
+                MostValuedHouses(
+                    house=row["house"],
+                    today=row["today"],
+                    p_day=row["p_day"],
+                    p_wk=row["p_wk"],
+                    p_mth=row["p_mth"],
+                    p_qtr=row["p_qtr"],
+                    p_hy=row["p_hy"],
+                    p_yr=row["p_yr"]
                 )
             )
 
-    # ==============================
-    # PROCESS BOTH FILES FIRST
-    # ==============================
-    await process_file(housefile, name1)
-    await process_file(stockfile, name2, ignore_second_col=True)
+    # =========================
+    # UPLOAD RECORD
+    # =========================
+    upload_row = UploadModel(
+        upload_date=upload_date,
+        data_date=data_date,
+        file_name=file.filename,
+        file_path=s3_key
+    )
 
-    # ==============================
-    # 🔥 TRUNCATE DATA TABLE ONLY
-    # ==============================
-    db.query(Mostvalued).delete(synchronize_session=False)
-
-    # ==============================
-    # INSERT FRESH DATA
-    # ==============================
-    db.bulk_save_objects(all_records)
+    db.add(upload_row)
+    db.bulk_save_objects(records)
     db.commit()
 
     return {
-        "message": "Upload successful (data table reset)",
-        "upload_ids": upload_ids,
-        "records_inserted": len(all_records)
+        "message": f"{category} uploaded successfully",
+        "records_inserted": len(records),
+        "file_url": get_s3_file_url(s3_key)
     }
-# -------------------- LIST UPLOADS WITH PRESIGNED URL --------------------
-@router.get("/uploads/", response_model=List[dict])
-def get_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(MostValuedupload).order_by(
-        MostValuedupload.upload_date.desc()
+
+
+# ==========================================================
+# GET LATEST DATA
+# ==========================================================
+@router.get("/latest")
+def get_latest(db: Session = Depends(get_db)):
+
+    stock_data = db.query(MostValuedStock).all()
+    house_data = db.query(MostValuedHouses).all()
+
+    def map_stock(r):
+        return {
+            "company": r.company,
+            "isin": r.isin,
+            "today": r.today,
+            "p_day": r.p_day,
+            "p_wk": r.p_wk,
+            "p_mth": r.p_mth,
+            "p_qtr": r.p_qtr,
+            "p_hy": r.p_hy,
+            "p_yr": r.p_yr
+        }
+
+    def map_house(r):
+        return {
+            "house": r.house,
+            "today": r.today,
+            "p_day": r.p_day,
+            "p_wk": r.p_wk,
+            "p_mth": r.p_mth,
+            "p_qtr": r.p_qtr,
+            "p_hy": r.p_hy,
+            "p_yr": r.p_yr
+        }
+
+    return {
+        "stock": [map_stock(x) for x in stock_data],
+        "house": [map_house(x) for x in house_data]
+    }
+
+
+# ==========================================================
+# UPLOAD HISTORY
+# ==========================================================
+@router.get("/uploads/{category}")
+def get_uploads(category: str, db: Session = Depends(get_db)):
+
+    _, UploadModel, _ = get_models(category)
+
+    uploads = db.query(UploadModel).order_by(
+        UploadModel.upload_date.desc()
     ).all()
 
     return [
         {
             "id": u.id,
-            "name": u.name,
             "upload_date": u.upload_date,
             "data_date": u.data_date,
-            "data_type": u.data_type,
             "file_name": u.file_name,
-            "file_url": get_s3_file_url(u.file_path)  # presigned URL for direct access
+            "file_url": get_s3_file_url(u.file_path)
         }
         for u in uploads
     ]
 
 
-# -------------------- DOWNLOAD FILE USING PRESIGNED URL --------------------
-@router.get("/files/{upload_id}")
-def get_file_presigned_url(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(MostValuedupload).filter(
-        MostValuedupload.id == upload_id
+# ==========================================================
+# DOWNLOAD FILE
+# ==========================================================
+@router.get("/download/{category}/{upload_id}")
+def download(category: str, upload_id: int, db: Session = Depends(get_db)):
+
+    _, UploadModel, _ = get_models(category)
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.id == upload_id
     ).first()
 
     if not upload:
         raise HTTPException(404, "File not found")
 
-    presigned_url = get_s3_file_url(upload.file_path)
-    return {"file_name": upload.file_name, "url": presigned_url}
+    file_stream = get_file_stream_from_s3(upload.file_path)
 
-
-# -------------------- DOWNLOAD CSV FILE --------------------
-@router.get("/download/{upload_id}")
-def download_file(upload_id: int, db: Session = Depends(get_db)):
-    # Fetch upload record
-    upload = db.query(MostValuedupload).filter(
-        MostValuedupload.id == upload_id
-    ).first()
-    if not upload:
-        raise HTTPException(404, "File not found")
-
-    # Get file stream from S3
-    file_stream = get_file_stream_from_s3(upload.file_path)  # You need this function in s3_utils
-    if not file_stream:
-        raise HTTPException(404, "File not found in S3")
-
-    # Ensure browser downloads with correct CSV name
     return StreamingResponse(
         file_stream,
-        media_type="text/csv",
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{upload.file_name}"'}
-    )# -------------------- GET LATEST DATA (split by type) --------------------
-@router.get("/latest/", response_model=Dict[str, Any])
-def get_latest_stock_data(db: Session = Depends(get_db)):
-    # Get the most recent upload
-    latest_upload = db.query(MostValuedupload).order_by(
-        desc(MostValuedupload.upload_date),
-        desc(MostValuedupload.data_date)
-    ).first()
+    )
 
-    if not latest_upload:
-        return {
-            "upload_date": None,
-            "data_date": None,
-            "type": None,
-            "stock": [],
-            "house": []
-        }
+# ==========================================================
+# UPDATE UPLOAD
+# ==========================================================
+@router.put("/upload/{category}/{upload_id}")
+async def update_upload(
+    category: str,
+    upload_id: int,
+    upload_date: date = Form(None),
+    data_date: date = Form(None),
+    file: UploadFile = File(None),
+    db: Session = Depends(get_db)
+):
 
-    # Fetch all stock data
-    stock_records = db.query(Mostvalued).filter(
-        Mostvalued.name == "stock",
-        Mostvalued.data_date == latest_upload.data_date
-    ).order_by(Mostvalued.id).all()
+    DataModel, UploadModel, cat = get_models(category)
 
-    # Fetch all house data
-    house_records = db.query(Mostvalued).filter(
-        Mostvalued.name == "house",
-        Mostvalued.data_date == latest_upload.data_date
-    ).order_by(Mostvalued.id).all()
-
-    # Convert to dicts
-    def map_records(records):
-        return [
-            {
-                "id": r.id,
-                "name": r.name,
-                "company": r.company,
-                "day": r.day,
-                "week": r.week,
-                "month": r.month,
-                "quarter": r.quarter,
-                "halfyear": r.halfyear,
-                "year": r.year,
-                "threeyear": r.threeyear
-            }
-            for r in records
-        ]
-
-    return {
-        "upload_date": latest_upload.upload_date,
-        "data_date": latest_upload.data_date,
-        "type": latest_upload.data_type,
-        "stock": map_records(stock_records),
-        "house": map_records(house_records)
-    }
-
-# -------------------- DELETE UPLOAD --------------------
-@router.delete("/uploads/{upload_id}")
-def delete_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(MostValuedupload).filter(
-        MostValuedupload.id == upload_id
+    upload = db.query(UploadModel).filter(
+        UploadModel.id == upload_id
     ).first()
 
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    deleted_rows = db.query(Mostvalued).filter(
-        Mostvalued.name == upload.name,
-        Mostvalued.data_date == upload.data_date,
-        Mostvalued.type == upload.data_type
-    ).delete(synchronize_session=False)
+    new_records = []
 
+    # =========================
+    # UPDATE METADATA
+    # =========================
+    if upload_date:
+        upload.upload_date = upload_date
+
+    if data_date:
+        upload.data_date = data_date
+
+    # =========================
+    # IF NEW FILE UPLOADED
+    # =========================
+    if file:
+
+        file_bytes = await file.read()
+
+        # delete old S3 file
+        if upload.file_path:
+            delete_file_from_s3(upload.file_path)
+
+        # upload new file
+        s3_key = upload_file_to_s3(
+            io.BytesIO(file_bytes),
+            f"mostvalued/{category}/{uuid4()}_{file.filename}"
+        )
+
+        upload.file_name = file.filename
+        upload.file_path = s3_key
+
+        # =========================
+        # SNAPSHOT REPLACE DATA
+        # =========================
+        db.query(DataModel).delete()
+
+        # define columns
+        if category == "stock":
+            columns = [
+                "company", "isin", "today", "p_day", "p_wk",
+                "p_mth", "p_qtr", "p_hy", "p_yr"
+            ]
+        else:
+            columns = [
+                "house", "today", "p_day", "p_wk",
+                "p_mth", "p_qtr", "p_hy", "p_yr"
+            ]
+
+        df = read_file(file_bytes, len(columns), columns)
+
+        for _, row in df.iterrows():
+
+            if category == "stock":
+                new_records.append(
+                    MostValuedStock(
+                        company=row["company"],
+                        isin=row["isin"],
+                        today=row["today"],
+                        p_day=row["p_day"],
+                        p_wk=row["p_wk"],
+                        p_mth=row["p_mth"],
+                        p_qtr=row["p_qtr"],
+                        p_hy=row["p_hy"],
+                        p_yr=row["p_yr"]
+                    )
+                )
+            else:
+                new_records.append(
+                    MostValuedHouses(
+                        house=row["house"],
+                        today=row["today"],
+                        p_day=row["p_day"],
+                        p_wk=row["p_wk"],
+                        p_mth=row["p_mth"],
+                        p_qtr=row["p_qtr"],
+                        p_hy=row["p_hy"],
+                        p_yr=row["p_yr"]
+                    )
+                )
+
+        db.bulk_save_objects(new_records)
+
+    db.commit()
+    db.refresh(upload)
+
+    return {
+        "message": f"{category} upload updated successfully",
+        "upload_id": upload.id,
+        "file_name": upload.file_name,
+        "upload_date": upload.upload_date,
+        "data_date": upload.data_date,
+        "records_inserted": len(new_records)
+    }
+# ==========================================================
+# DELETE UPLOAD
+# ==========================================================
+@router.delete("/upload/{category}/{upload_id}")
+def delete_upload(category: str, upload_id: int, db: Session = Depends(get_db)):
+
+    DataModel, UploadModel, _ = get_models(category)
+
+    upload = db.query(UploadModel).filter(
+        UploadModel.id == upload_id
+    ).first()
+
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+
+    # delete all snapshot data
+    db.query(DataModel).delete()
+
+    # delete file from S3
     if upload.file_path:
         delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()
 
-    return {
-        "message": "Upload deleted successfully",
-        "upload_id": upload_id,
-        "rows_deleted": deleted_rows
-    }
-
-
-# -------------------- UPDATE UPLOAD --------------------
-@router.put("/uploads/{upload_id}")
-async def update_upload(
-    upload_id: int,
-    file: UploadFile = File(None),
-    name: str = Form(None),
-    upload_date: date = Form(None),
-    data_date: date = Form(None),
-    db: Session = Depends(get_db)
-):
-    upload = db.query(MostValuedupload).filter(
-        MostValuedupload.id == upload_id
-    ).first()
-
-    if not upload:
-        raise HTTPException(404, "Upload not found")
-
-    # Store old values for deletion
-    old_name = upload.name
-    old_upload_date = upload.upload_date
-    old_data_date = upload.data_date
-    old_type = upload.data_type
-
-    # Update upload fields
-    if upload_date:
-        upload.upload_date = upload_date
-    if data_date:
-        upload.data_date = data_date
-    if name:
-        upload.name = name
-
-    new_records = []
-
-    if file:
-        # Delete old S3 file
-        if upload.file_path:
-            delete_file_from_s3(upload.file_path)
-
-        # Upload new file to S3
-        contents = await file.read()
-        s3_key = upload_file_to_s3(io.BytesIO(contents), "MostValuedHouse/Stock")
-        upload.file_name = file.filename
-        upload.file_path = s3_key
-
-        # Delete old Mostvalued records using old values
-        db.query(Mostvalued).filter(
-            Mostvalued.name == old_name,
-            Mostvalued.data_date == old_data_date,
-            Mostvalued.type == old_type
-        ).delete(synchronize_session=False)
-
-        # Read new file
-        try:
-            if file.filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(contents), header=None)
-            elif file.filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(contents.decode("utf-8")), header=None)
-            else:
-                raise HTTPException(400, "Invalid file type")
-        except Exception as e:
-            raise HTTPException(400, f"Failed to read file: {e}")
-
-        if df.shape[1] != 8:
-            raise HTTPException(
-                400,
-                "File must have exactly 8 columns: company, day, week, month, quarter, halfyear, year, threeyear"
-            )
-
-        df.columns = ["company", "day", "week", "month", "quarter", "halfyear", "year", "threeyear"]
-
-        new_records = [
-            Mostvalued(
-                name=name if name else upload.name,
-                company=row["company"],
-                day=float(row["day"]),
-                week=float(row["week"]),
-                month=float(row["month"]),
-                quarter=float(row["quarter"]),
-                halfyear=float(row["halfyear"]),
-                year=float(row["year"]),
-                threeyear=float(row["threeyear"]),
-                upload_date=upload.upload_date,
-                data_date=upload.data_date,
-                type=upload.data_type
-            )
-            for _, row in df.iterrows()
-        ]
-
-        if new_records:
-            db.bulk_save_objects(new_records)
-
-    db.commit()
-    db.refresh(upload)
-
-    return {
-        "message": "Upload updated successfully",
-        "upload_id": upload.id,
-        "file_name": upload.file_name,
-        "upload_date": upload.upload_date,
-        "data_date": upload.data_date,
-        "records_inserted": len(new_records) if file else 0
-    }
+    return {"message": "Upload deleted successfully"}

@@ -15,7 +15,7 @@ class StockPulseUpload(Base):
 
 
 class StockPulseData(Base):
-    __tablename__ = "stockpulse"
+    __tablename__ = "stock"
 
     id = Column(Integer, primary_key=True, index=True)
     scrip_code = Column(String, nullable=True)
@@ -24,7 +24,6 @@ class StockPulseData(Base):
     isin = Column(String, nullable=True)
     fv = Column(Float, nullable=True)
     cmp = Column(Float, nullable=True)
-
     dma_5 = Column(Float, nullable=True)
     dma_21 = Column(Float, nullable=True)
     dma_60 = Column(Float, nullable=True)
@@ -34,19 +33,15 @@ class StockPulseData(Base):
     wkhdt_52 = Column(Date, nullable=True)
     wkl_52 = Column(Float, nullable=True)
     wkldt_52 = Column(Date, nullable=True)
-
     cur_vol = Column(Float, nullable=True)
-
     dvma_5 = Column(Float, nullable=True)
     dvma_21 = Column(Float, nullable=True)
     dvma_60 = Column(Float, nullable=True)
     dvma_245 = Column(Float, nullable=True)
-
     wkhv_52 = Column(Float, nullable=True)
     wkhvdt_52 = Column(Date, nullable=True)
     wklv_52 = Column(Float, nullable=True)
     wklvdt_52 = Column(Date, nullable=True)
-
     myrh = Column(Float, nullable=True)
     myrhdt = Column(Date, nullable=True)
     myrl = Column(Float, nullable=True)
@@ -55,11 +50,8 @@ class StockPulseData(Base):
     myruhdt = Column(Date, nullable=True)
     myrul = Column(Float, nullable=True)
     myruldt = Column(Date, nullable=True)
+    remark = Column(String, nullable=True)
     pulse_score=Column(Integer)
 
-    data_date = Column(Date, nullable=True)
-    type = Column(String, nullable=True)
-    upload_date = Column(Date, nullable=False)  # new
-    data_date = Column(Date, nullable=False)    # new
     
     

@@ -64,7 +64,6 @@ def read_file_from_bytes(file_bytes: bytes, required_columns: list, category: st
     df.columns = required_columns
     df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
     return df
-from sqlalchemy import text
 
 # -------------------- UPLOAD --------------------
 @router.post("/{category}/upload")
@@ -103,7 +102,6 @@ async def upload_file(
     records = [
         DataModel(
             **{col: row[col] for col in required_columns},
-            group_id=group_id
         )
         for _, row in df.iterrows()
     ]
@@ -155,16 +153,20 @@ def get_all_uploads(db: Session = Depends(get_db)):
 # -------------------- GET LATEST --------------------
 @router.get("/{category}/latest")
 def get_latest(category: str, db: Session = Depends(get_db)):
-    DataModel, UploadModel, _ = get_models(category)
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest_upload:
-        raise HTTPException(404, "No upload found")
-    data = db.query(DataModel).filter(DataModel.group_id == latest_upload.group_id).all()
-    return {
-        "data_date": latest_upload.data_date,
-        "records": data
-    }
+    DataModel, _, _ = get_models(category)
 
+    rows = db.query(DataModel).all()
+
+    # convert ORM → dict (IMPORTANT FIX)
+    result = [
+        {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows
+    ]
+
+    return {
+        "records": result
+    }
+    
 # -------------------- DOWNLOAD --------------------
 @router.get("/{category}/download/{group_id}")
 def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
@@ -210,12 +212,10 @@ async def update_upload(
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Delete old DB records
-        db.query(DataModel).filter(DataModel.group_id == group_id).delete(synchronize_session=False)
 
         # Insert new records
         df = read_file_from_bytes(file_bytes, required_columns, category)
-        new_records = [DataModel(**{col: row[col] for col in required_columns}, group_id=group_id) for _, row in df.iterrows()]
+        new_records = [DataModel(**{col: row[col] for col in required_columns}) for _, row in df.iterrows()]
         db.bulk_save_objects(new_records)
 
     db.commit()
@@ -223,7 +223,6 @@ async def update_upload(
 
     return {
         "message": f"{category} upload updated successfully",
-        "group_id": group_id,
         "file_s3_url": get_s3_file_url(upload.file_path),
         "records_inserted": len(new_records)
     }
@@ -236,9 +235,6 @@ def delete_upload(category: str, group_id: str, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Delete DB records
-    db.query(DataModel).filter(DataModel.group_id == group_id).delete()
-    # Delete S3 file
     delete_file_from_s3(upload.file_path)
 
     db.delete(upload)

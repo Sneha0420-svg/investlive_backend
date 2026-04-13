@@ -6,7 +6,7 @@ from app.database import Base
 # Yearly IPO Summary
 # ------------------------------
 class IPOHeatmapYear(Base):
-    __tablename__ = "ipo_heatmap_yearwise"
+    __tablename__ = "ipo_heatmap_idx"
 
     id = Column(Integer, primary_key=True, index=True)
     year = Column(Integer,  unique=True, index=True)

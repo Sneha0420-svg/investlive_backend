@@ -1,19 +1,20 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
-from sqlalchemy.orm import Session
+import io
 from datetime import date
 from uuid import uuid4
 import pandas as pd
+
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 from urllib.parse import quote
-from fastapi.responses import StreamingResponse
+
 from app.database import SessionLocal
 from app.models.indstocksnapshot_graph import IndStockGraph, IndStockGraphUpload
 from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
-import io
 
 router = APIRouter(prefix="/indstockgraph", tags=["IndStock Graph"])
 
-# ---------------- DB session ----------------
+# ---------------- DB ----------------
 def get_db():
     db = SessionLocal()
     try:
@@ -21,13 +22,8 @@ def get_db():
     finally:
         db.close()
 
-# ---------------- Helpers ----------------
-def clean_nan(val):
-    return None if isinstance(val, float) and pd.isna(val) else val
 
-from sqlalchemy.exc import SQLAlchemyError
-
-# ---------------- Upload ----------------
+# ---------------- UPLOAD ----------------
 @router.post("/upload")
 async def upload_file(
     upload_date: date = Form(...),
@@ -79,7 +75,6 @@ async def upload_file(
                 ADV=int(r["ADV"]) if r["ADV"] else 0,
                 DECL=int(r["DECL"]) if r["DECL"] else 0,
                 UNCHG=int(r["UNCHG"]) if r["UNCHG"] else 0,
-                group_id=group_id
             )
             for _, r in df.iterrows()
         ]
@@ -108,103 +103,100 @@ async def upload_file(
         delete_file_from_s3(s3_key)
         raise HTTPException(500, f"Error: {str(e)}")
 
-# ---------------- Get Uploads ----------------
+# ---------------- UPLOAD LIST ----------------
 @router.get("/uploads")
 def get_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(IndStockGraphUpload).order_by(IndStockGraphUpload.upload_date.desc()).all()
+    uploads = db.query(IndStockGraphUpload).order_by(
+        IndStockGraphUpload.upload_date.desc()
+    ).all()
+
     return [
-        {"id": u.id, "group_id": u.group_id, "upload_date": u.upload_date,
-         "data_date": u.data_date, "file_name": u.file_name}
+        {
+            "id": u.id,
+            "group_id": u.group_id,
+            "upload_date": u.upload_date,
+            "data_date": u.data_date,
+            "file_name": u.file_name
+        }
         for u in uploads
     ]
 
-# ---------------- Get Latest Data ----------------
+
+# ---------------- LATEST DATA ----------------
 @router.get("/latest")
-def get_latest_data(db: Session = Depends(get_db)):
-    latest_upload = db.query(IndStockGraphUpload).order_by(IndStockGraphUpload.data_date.desc()).first()
-    if not latest_upload:
-        raise HTTPException(404, "No upload data found")
-
-    latest_records = db.query(IndStockGraph).filter(
-        IndStockGraph.group_id == latest_upload.group_id
-    ).all()
-
-    result = [
-        {
-            "ID": r.ID,
-            "TRN_DATE": r.TRN_DATE,
-            "STKS_TRD": r.STKS_TRD,
-            "ADV": r.ADV,
-            "DECL": r.DECL,
-            "UNCHG": r.UNCHG,
-            "group_id": r.group_id
-        } for r in latest_records
-    ]
+def get_latest(db: Session = Depends(get_db)):
+    rows = db.query(IndStockGraph).all()
 
     return {
-        "upload_id": latest_upload.id,
-        "data_date": latest_upload.data_date,
-        "data_type": latest_upload.data_type,
-        "records": result
+        "records": [
+            {
+                "ID": r.ID,
+                "TRN_DATE": r.TRN_DATE,
+                "STKS_TRD": r.STKS_TRD,
+                "ADV": r.ADV,
+                "DECL": r.DECL,
+                "UNCHG": r.UNCHG,
+            }
+            for r in rows
+        ]
     }
-# ---------------- Get Latest IndStockGraph Data by TRN_DATE ----------------
+
+
+# ---------------- LATEST BY DATE ----------------
 @router.get("/latest-from-graph")
-def get_latest_graph_data(db: Session = Depends(get_db)):
-    # Get the latest TRN_DATE from IndStockGraph
-    latest_date = db.query(IndStockGraph.TRN_DATE).order_by(IndStockGraph.TRN_DATE.desc()).first()
+def latest_by_date(db: Session = Depends(get_db)):
+
+    latest_date = db.query(IndStockGraph.TRN_DATE)\
+        .order_by(IndStockGraph.TRN_DATE.desc())\
+        .first()
+
     if not latest_date or not latest_date[0]:
-        raise HTTPException(404, "No IndStockGraph data found")
+        raise HTTPException(404, "No data found")
 
-    latest_date = latest_date[0]
-
-    # Fetch all records with that latest date
-    latest_records = db.query(IndStockGraph).filter(IndStockGraph.TRN_DATE == latest_date).all()
-    result = [
-        {
-            "ID": r.ID,
-            "TRN_DATE": r.TRN_DATE,
-            "STKS_TRD": r.STKS_TRD,
-            "ADV": r.ADV,
-            "DECL": r.DECL,
-            "UNCHG": r.UNCHG,
-            "group_id": r.group_id
-        } for r in latest_records
-    ]
+    rows = db.query(IndStockGraph)\
+        .filter(IndStockGraph.TRN_DATE == latest_date[0])\
+        .all()
 
     return {
-        "latest_date": latest_date,
-        "records": result
+        "latest_date": latest_date[0],
+        "records": [
+            {
+                "ID": r.ID,
+                "TRN_DATE": r.TRN_DATE,
+                "STKS_TRD": r.STKS_TRD,
+                "ADV": r.ADV,
+                "DECL": r.DECL,
+                "UNCHG": r.UNCHG,
+            }
+            for r in rows
+        ]
     }
-# ---------------- Download File ----------------
 
 
+# ---------------- DOWNLOAD ----------------
 @router.get("/download/{group_id}")
 def download_file(group_id: str, db: Session = Depends(get_db)):
-    upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
+
+    upload = db.query(IndStockGraphUpload).filter_by(group_id=group_id).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
     file_stream = get_file_stream_from_s3(upload.file_path)
-    if file_stream is None:
-        raise HTTPException(404, "File not found in S3")
 
-    file_stream.seek(0)
-
-    if upload.file_name.lower().endswith(".csv"):
-        media_type = "text/csv"
-    elif upload.file_name.lower().endswith((".xls", ".xlsx")):
-        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    else:
-        media_type = "application/octet-stream"
+    if not file_stream:
+        raise HTTPException(404, "File not found")
 
     filename = quote(upload.file_name)
 
     return StreamingResponse(
         file_stream,
-        media_type=media_type,
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-# ---------------- Update Upload ----------------
+
+
+# ---------------- UPDATE ----------------
 @router.put("/upload/{group_id}")
 async def update_upload(
     group_id: str,
@@ -213,7 +205,11 @@ async def update_upload(
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
+
+    upload = db.query(IndStockGraphUpload)\
+        .filter_by(group_id=group_id)\
+        .first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
@@ -223,60 +219,69 @@ async def update_upload(
         upload.data_date = data_date
 
     if file:
-        # Delete old file from S3
+
         delete_file_from_s3(upload.file_path)
 
-        # Upload new file
-        s3_folder = "indstockgraph"
-        s3_key = upload_file_to_s3(file_obj=file.file, folder=s3_folder, filename=file.filename)
+        contents = await file.read()
+        file_like = io.BytesIO(contents)
+
+        s3_key = upload_file_to_s3(
+            file_obj=file_like,
+            folder="indstockgraph",
+            filename=file.filename
+        )
+
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Delete old data
-        db.query(IndStockGraph).filter(IndStockGraph.group_id == group_id).delete(synchronize_session=False)
+        db.query(IndStockGraph)\
+            .delete(synchronize_session=False)
 
-        # Read new file
-        file.file.seek(0)
-        if file.filename.lower().endswith(".csv"):
-            df = pd.read_csv(file.file, header=None)
+        file_like.seek(0)
+
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(file_like, header=None)
         else:
-            df = pd.read_excel(file.file, header=None)
-
-        if df.shape[1] != 6:
-            raise HTTPException(400, "File must have exactly 6 columns")
+            df = pd.read_excel(file_like, header=None)
 
         df.columns = ["ID", "TRN_DATE", "STKS_TRD", "ADV", "DECL", "UNCHG"]
-        df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"]).dt.date
+        df["TRN_DATE"] = pd.to_datetime(df["TRN_DATE"], errors="coerce").dt.date
 
         records = [
             IndStockGraph(
                 TRN_DATE=r["TRN_DATE"],
-                STKS_TRD=int(r["STKS_TRD"]),
-                ADV=int(r["ADV"]),
-                DECL=int(r["DECL"]),
-                UNCHG=int(r["UNCHG"]),
-                group_id=group_id
+                STKS_TRD=int(r["STKS_TRD"] or 0),
+                ADV=int(r["ADV"] or 0),
+                DECL=int(r["DECL"] or 0),
+                UNCHG=int(r["UNCHG"] or 0),
             )
             for _, r in df.iterrows()
         ]
+
         db.bulk_save_objects(records)
 
     db.commit()
-    return {"message": "Upload updated successfully", "group_id": group_id}
 
-# ---------------- Delete Upload ----------------
+    return {"message": "Updated successfully", "group_id": group_id}
+
+
+# ---------------- DELETE ----------------
 @router.delete("/upload/{group_id}")
 def delete_upload(group_id: str, db: Session = Depends(get_db)):
-    upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
+
+    upload = db.query(IndStockGraphUpload)\
+        .filter_by(group_id=group_id)\
+        .first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Delete all records
-    db.query(IndStockGraph).filter(IndStockGraph.group_id == group_id).delete(synchronize_session=False)
+    db.query(IndStockGraph)\
+        .delete(synchronize_session=False)
 
-    # Delete file from S3
     delete_file_from_s3(upload.file_path)
 
     db.delete(upload)
     db.commit()
-    return {"message": "Upload deleted successfully"}
+
+    return {"message": "Deleted successfully"}

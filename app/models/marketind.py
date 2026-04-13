@@ -4,7 +4,6 @@ from app.database import Base
 class StockData(Base):
     __tablename__ = "mkt_tbl"
 
-    unique_id = Column(Integer, primary_key=True, index=True)
     name = Column(String(25), nullable=False)
     yr_ago = Column(Numeric(20, 2), nullable=True)
     curnt = Column(Numeric(20, 2), nullable=True)
@@ -13,8 +12,7 @@ class StockData(Base):
     S_ID = Column(Integer, nullable=False)
     IDX_ID = Column(Integer, nullable=False)
     flag = Column(String(10), nullable=False)
-    ID=Column(Integer,nullable=True)
-    mkt_date = Column(Date, nullable=True) 
+    ID=Column(Integer,nullable=True, primary_key=True,)
 
 class MarketIndicatorUpload(Base):
     __tablename__ = "market_indicator_uploads"

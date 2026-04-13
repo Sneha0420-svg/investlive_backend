@@ -5,8 +5,7 @@ class DataUpload(Base):
     __tablename__ = "ipo_data"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
+ 
 
     isin = Column(String, index=True, nullable=True)
     co_name = Column(String, nullable=True)

@@ -14,7 +14,6 @@ class FiftyTwoWeekHighLow(Base):
     CH_RS = Column(Numeric(20, 2), nullable=False)
     CH_PER = Column(Numeric(20, 1), nullable=False)
 
-    group_id = Column(String(36), nullable=False, index=True)  # Added group_id
 
 
 class FiftyTwoWeekHighLowUpload(Base):
@@ -43,7 +42,6 @@ class MultiYearHighLow(Base):
     SINCE = Column(String(20), nullable=False)
     TYPE = Column(Integer, nullable=False)
     ID = Column(Integer, primary_key=True)  # Already present
-    group_id = Column(String(36), nullable=False, index=True)  # Added group_id
 
 
 class MultiYearHighLowUpload(Base):
@@ -71,7 +69,6 @@ class CircuitUpLow(Base):
     WKH_DT_52 = Column("52WKHDT", String(11), nullable=False)
     WKL_52 = Column("52WKL", Numeric(20, 2), nullable=False)
     WKL_DT_52 = Column("52WKLDT", String(11), nullable=False)
-    group_id = Column(String(36), nullable=False, index=True)
 
 class CircuitUpLowUpload(Base):
     __tablename__ = "circuit_up_low_upload"

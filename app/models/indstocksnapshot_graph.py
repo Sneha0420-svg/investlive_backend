@@ -10,7 +10,6 @@ class IndStockGraph(Base):
     ADV = Column(Integer, nullable=False)
     DECL = Column(Integer, nullable=False)
     UNCHG = Column(Integer, nullable=False)
-    group_id = Column(String(36), nullable=False, index=True)  # Added group_id
 
 class IndStockGraphUpload(Base):
     __tablename__ = "indstock_graph_upload"

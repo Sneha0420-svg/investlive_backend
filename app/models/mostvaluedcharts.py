@@ -12,7 +12,6 @@ class MostValCompanyChart(Base):
     ISIN = Column(String(20), nullable=False)
     VAL = Column(Integer, nullable=False)
     TRN_DATE = Column(Date, nullable=False)
-    group_id = Column(String(50), nullable=False, index=True)
 
 
 # ============================================================
@@ -41,7 +40,6 @@ class MostValHouseChart(Base):
     HOUSE_NAME = Column(String(45), nullable=False)
     VALUE = Column(Integer, nullable=False)
     TRN_DATE = Column(Date, nullable=False)
-    group_id = Column(String(50), nullable=False, index=True)
 
 
 # ============================================================

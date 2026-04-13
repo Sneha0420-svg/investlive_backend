@@ -126,9 +126,7 @@ async def upload_single_data(
     ]
 
     # ---------------- Delete Existing Data for the Same Date ----------------
-    deleted_rows = db.query(StockData).filter(
-        StockData.mkt_date == mkt_date
-    ).delete()
+    deleted_rows = db.query(StockData).delete()
     db.commit()
 
     # ---------------- Convert to DB objects ----------------
@@ -144,7 +142,6 @@ async def upload_single_data(
             IDX_ID=safe_int(row["IDX_ID"]),
             flag=str(row["flag"]).strip() if row["flag"] else "",
             ID=safe_int(row["ID"]),
-            mkt_date=mkt_date
         )
         records.append(record)
 
@@ -207,15 +204,14 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
 # Latest Market Indicator Data
 # ======================================================
 @router.get("/latest/")
-def get_latest_marketindicator(db: Session = Depends(get_db)):
+def get_marketindicator(db: Session = Depends(get_db)):
 
-    latest_date = db.query(func.max(StockData.mkt_date)).scalar()
-    if not latest_date:
-        raise HTTPException(404, "No stock data found")
+    stocks = db.query(StockData).order_by(StockData.H_ID, StockData.ID).all()
 
-    stocks = db.query(StockData).filter(StockData.mkt_date == latest_date).order_by(StockData.H_ID, StockData.ID).all()
+    if not stocks:
+        raise HTTPException(status_code=404, detail="No stock data found")
 
-    uploads = db.query(MarketIndicatorUpload).filter(MarketIndicatorUpload.mkt_date == latest_date).all()
+    uploads = db.query(MarketIndicatorUpload).all()
     uploaded_files = [
         {
             "id": u.id,
@@ -255,6 +251,7 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
                 current_section = {"title": "(No Title)", "rows": []}
                 result[tab_name].append(current_section)
                 current_section_per_tab[tab_name] = current_section
+
             current_section["rows"].append([
                 stock.name,
                 stock.yr_ago,
@@ -266,12 +263,10 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
             ])
 
     return {
-        "latest_mkt_date": latest_date,
         "total_records": len(stocks),
         "stocks_by_tab": result,
         "uploaded_files": uploaded_files
     }
-
 
 # ======================================================
 # Get Stocks by IDX_ID
@@ -279,18 +274,15 @@ def get_latest_marketindicator(db: Session = Depends(get_db)):
 @router.get("/idx/{idx_id}")
 def get_stocks_by_idx(idx_id: int, db: Session = Depends(get_db)):
 
-    latest_date = db.query(func.max(StockData.mkt_date)).scalar()
-    if not latest_date:
-        raise HTTPException(404, f"No stock data found for IDX_ID {idx_id}")
+    stocks = db.query(StockData)\
+        .filter(StockData.IDX_ID == idx_id)\
+        .order_by(StockData.H_ID, StockData.ID)\
+        .all()
 
-    stocks = db.query(StockData).filter(
-        StockData.IDX_ID == idx_id,
-        StockData.mkt_date == latest_date
-    ).order_by(StockData.H_ID, StockData.ID).all()
+    if not stocks:
+        raise HTTPException(status_code=404, detail="No stock data found for given IDX_ID")
 
     return stocks
-
-
 # ======================================================
 # Delete Upload
 # ======================================================
@@ -301,12 +293,10 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    deleted_rows = db.query(StockData).filter(StockData.mkt_date == upload.mkt_date).delete()
     delete_file_from_s3(upload.file_path)
     db.delete(upload)
     db.commit()
 
     return {
         "message": "Upload deleted successfully",
-        "stocks_deleted": deleted_rows
     }

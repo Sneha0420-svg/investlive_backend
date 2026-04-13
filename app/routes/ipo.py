@@ -175,8 +175,7 @@ async def upload_multiple_data(
                     mktmkr3=row.get("MKTMKR3"),
                     mktmkr4=row.get("MKTMKR4"),
                     mktmkr5=row.get("MKTMKR5"),
-                    upload_date=upload_date,
-                    data_date=data_date
+                  
                 )
             )
 
@@ -216,31 +215,17 @@ def get_uploads_summary(db: Session = Depends(get_db)):
         for u in uploads
     ]
 
-
-# -------------------- Get Latest --------------------
 @router.get("/latest")
-def get_latest_all(db: Session = Depends(get_db)):
+def get_all_data(db: Session = Depends(get_db)):
 
-    latest_upload = db.query(
-        DataUpload.upload_date,
-        DataUpload.data_date
-    ).order_by(DataUpload.upload_date.desc()).first()
+    rows = db.query(DataUpload).order_by(DataUpload.isin).all()
 
-    if not latest_upload:
-        raise HTTPException(404, "No data found")
-
-    rows = db.query(DataUpload).filter(
-        DataUpload.upload_date == latest_upload.upload_date,
-        DataUpload.data_date == latest_upload.data_date
-    ).order_by(DataUpload.isin).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No data found")
 
     return {
-        "upload_date": latest_upload.upload_date,
-        "data_date": latest_upload.data_date,
         "data": clean_objs(rows)
     }
-
-
 # -------------------- Download File --------------------
 @router.get("/files/{upload_id}")
 def download_file(upload_id: int, db: Session = Depends(get_db)):
@@ -302,12 +287,7 @@ async def update_upload(
         upload.file_name = file.filename
         upload.file_path = s3_key
 
-        # Delete old IPO data
-        db.query(DataUpload).filter(
-            DataUpload.upload_date == upload.upload_date,
-            DataUpload.data_date == upload.data_date
-        ).delete(synchronize_session=False)
-
+       
         # Read file for processing
         file_stream = io.BytesIO(contents)
 
@@ -393,8 +373,7 @@ async def update_upload(
                     mktmkr3=row.get("MKTMKR3"),
                     mktmkr4=row.get("MKTMKR4"),
                     mktmkr5=row.get("MKTMKR5"),
-                    upload_date=upload.upload_date,
-                    data_date=upload.data_date
+                  
                 )
             )
 
@@ -420,14 +399,7 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
 
     upload = db.query(IPOUpload).filter(IPOUpload.id == upload_id).first()
 
-    if not upload:
-        raise HTTPException(404, "Upload not found")
-
-    db.query(DataUpload).filter(
-        DataUpload.upload_date == upload.upload_date,
-        DataUpload.data_date == upload.data_date
-    ).delete(synchronize_session=False)
-
+   
     delete_file_from_s3(upload.file_path)
 
     db.delete(upload)

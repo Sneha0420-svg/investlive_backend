@@ -5,7 +5,6 @@ class StockTrack(Base):
     __tablename__ = "stock_track"
 
     id = Column("ID", Integer, primary_key=True, index=True)
-    mkt_date = Column(Date, nullable=True)
     isin = Column("ISIN", String(12), nullable=False)
 
     # adjust lengths based on real CSV data

@@ -2,7 +2,7 @@ from sqlalchemy import Column, String, Numeric, Integer, Date,BigInteger
 from app.database import Base
 
 class McapGainersLosers(Base):
-    __tablename__ = "mcap_gainers_losers"
+    __tablename__ = "mcap_movers"
 
     COMPANY = Column(String(25), nullable=True)
     ISIN = Column(String(25), primary_key=True, index=True)
@@ -20,7 +20,6 @@ class McapGainersLosers(Base):
     DMA_PER_245 = Column("245DMA_PER", Numeric(20, 2), nullable=False)
     WKH_52 = Column("52WKH", Numeric(20, 2), nullable=False)
     WKL_52 = Column("52WKL", Numeric(20, 2), nullable=False)
-    group_id = Column(String(36), nullable=False, index=True)  # Added group_id
 
 class McapGainersLosersUpload(Base):
     __tablename__ = "mcap_gainers_losers_upload"
@@ -34,7 +33,7 @@ class McapGainersLosersUpload(Base):
     file_path = Column(String(500), nullable=False)
     
 class Upward_DownwardMobile(Base):
-    __tablename__ = "upward_downward_mobile"
+    __tablename__ = "up_down_mbl"
 
     COMPANY = Column(String(25), nullable=True)
     ISIN = Column(String(25), primary_key=True, index=True)

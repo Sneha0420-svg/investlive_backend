@@ -1,32 +1,56 @@
 from sqlalchemy import Column, Integer, String, Float, Date
 from app.database import Base
 
-class Mostvalued(Base):
-    __tablename__ = "mostvalueddata"
+class MostValuedHouses(Base):
+    __tablename__ = "most_valued_houses"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    name= Column(String, nullable=False)
-    company=Column(String, nullable=False)
-    day = Column(Float)
-    week = Column(Float)
-    month = Column(Float)
-    quarter = Column(Float)
-    halfyear = Column(Float)
-    year = Column(Float)
-    threeyear = Column(Float)
-    upload_date = Column(Date, nullable=False)  
-    data_date = Column(Date, nullable=False) 
-    type = Column(String, nullable=False)
+    house = Column(String(45), nullable=False)
 
-class MostValuedupload(Base):
-    __tablename__ = "mostvaluedfiles"
+    today = Column(Float)
+    p_day = Column(Float)
+    p_wk = Column(Float)
+    p_mth = Column(Float)
+    p_qtr = Column(Float)
+    p_hy = Column(Float)
+    p_yr = Column(Float)
+    
+class MostValuedStock(Base):
+    __tablename__ = "most_valued_stock"
 
     id = Column(Integer, primary_key=True, index=True)
-    name= Column(String, nullable=False)
+
+    company = Column(String(25), nullable=False)
+    isin = Column(String(25), nullable=False)
+
+    today = Column(Float)
+    p_day = Column(Float)
+    p_wk = Column(Float)
+    p_mth = Column(Float)
+    p_qtr = Column(Float)
+    p_hy = Column(Float)
+    p_yr = Column(Float)
+
+
+class MostValuedHousesUpload(Base):
+    __tablename__ = "most_valued_houses_uploads"
+
+    id = Column(Integer, primary_key=True, index=True)
+
     upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
-    data_type = Column(String(100), nullable=False)
 
     file_name = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=False)  # stored path or URL
+    file_path = Column(String(500), nullable=False)
+    
+class MostValuedStockUpload(Base):
+    __tablename__ = "most_valued_stock_uploads"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    upload_date = Column(Date, nullable=False)
+    data_date = Column(Date, nullable=False)
+
+    file_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)

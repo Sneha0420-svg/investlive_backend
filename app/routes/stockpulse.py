@@ -11,7 +11,7 @@ from sqlalchemy import desc
 
 from app.database import SessionLocal
 from app.models.stockpulse import StockPulseData, StockPulseUpload
-from app.schemas.stockpulse import StockPulseUploadSchema, StockPulseLatestResponse
+from app.schemas.stockpulse import StockPulseUploadSchema, StockPulseLatestResponse, StockPulseDataSchema
 from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
 
 router = APIRouter(prefix="/stockpulse", tags=["StockPulse"])
@@ -40,7 +40,6 @@ def read_stockpulse_file(file_obj) -> pd.DataFrame:
 # -------------------- UPLOAD --------------------
 from sqlalchemy.exc import SQLAlchemyError
 
-from sqlalchemy.exc import SQLAlchemyError
 
 @router.post("/upload")
 async def upload_multiple_data(
@@ -61,18 +60,22 @@ async def upload_multiple_data(
     ]
 
     try:
-        # 🔥 1. DELETE ALL OLD DATA (FULL RESET)
+        # 🔥 1. DELETE OLD DATA (ONLY MAIN TABLE)
         db.query(StockPulseData).delete(synchronize_session=False)
 
         for file in files:
 
-            # ✅ Upload to S3
+            # =========================
+            # Upload file to S3
+            # =========================
             s3_key = upload_file_to_s3(
                 file.file,
                 f"stockpulse/{uuid4()}_{file.filename}"
             )
 
-            # ✅ Save metadata (keep history)
+            # =========================
+            # SAVE METADATA ONLY HERE
+            # =========================
             upload_record = StockPulseUpload(
                 upload_date=upload_date,
                 data_date=data_date,
@@ -80,20 +83,22 @@ async def upload_multiple_data(
                 file_name=file.filename,
                 file_path=s3_key
             )
+
             db.add(upload_record)
             db.flush()
             upload_ids.append(upload_record.id)
 
-            # ✅ Read file
+            # =========================
+            # READ FILE
+            # =========================
             s3_file = get_file_stream_from_s3(s3_key)
             df = read_stockpulse_file(s3_file)
 
-            # ✅ Validate structure
             df = df.drop(df.columns[31], axis=1)
+
             if df.shape[1] != 32:
                 raise HTTPException(400, "Excel must have exactly 32 columns")
 
-            # ✅ Assign column names
             df.columns = [
                 "scrip_code", "scrip", "co_code", "isin", "fv", "cmp",
                 "dma_5", "dma_21", "dma_60", "dma_245",
@@ -110,13 +115,9 @@ async def upload_multiple_data(
                 "pulse_score"
             ]
 
-            # ✅ Clean NaN
             df = df.replace({np.nan: None})
-
-            # ✅ Remove duplicate ISIN inside file
             df = df.drop_duplicates(subset=["isin"], keep="last")
 
-            # ✅ Convert date columns
             for col in date_cols:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
 
@@ -125,27 +126,22 @@ async def upload_multiple_data(
             if df.empty:
                 raise HTTPException(400, "Uploaded file is empty")
 
-            # ✅ Convert to dict (FAST)
+            # =========================
+            # DATA TABLE (NO METADATA)
+            # =========================
             records = df.to_dict(orient="records")
-
-            # ✅ Attach metadata
-            for r in records:
-                r.update({
-                    "type": data_type,
-                    "upload_date": upload_date,
-                    "data_date": data_date
-                })
-
             all_records.extend(records)
 
-        # ✅ 2. BULK INSERT NEW DATA
+        # =========================
+        # BULK INSERT ONLY PURE DATA
+        # =========================
         if all_records:
             db.bulk_insert_mappings(StockPulseData, all_records)
 
         db.commit()
 
         return {
-            "message": "All old data deleted and replaced with new data",
+            "message": "Upload successful (clean separation of data & metadata)",
             "upload_ids": upload_ids,
             "records_inserted": len(all_records)
         }
@@ -157,8 +153,7 @@ async def upload_multiple_data(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error: {str(e)}")
-
-
+    
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads", response_model=List[StockPulseUploadSchema])
 def list_uploads(db: Session = Depends(get_db)):
@@ -193,29 +188,25 @@ def download(upload_id: int, db: Session = Depends(get_db)):
     )
 
 
-# -------------------- LATEST DATA --------------------
+from sqlalchemy import text
+from fastapi import HTTPException, Depends
+from sqlalchemy.orm import Session
+
 @router.get("/latest", response_model=StockPulseLatestResponse)
 def latest_stockpulse(db: Session = Depends(get_db)):
-    latest = db.query(StockPulseUpload).order_by(
-        desc(StockPulseUpload.upload_date),
-        desc(StockPulseUpload.data_date),
-    ).first()
 
-    if not latest:
-        raise HTTPException(404, "No uploads found")
+    try:
+        result = db.execute(
+            text('SELECT * FROM stock')
+        ).mappings().all()
 
-    records = db.query(StockPulseData).filter(
-        StockPulseData.data_date == latest.data_date,
-        StockPulseData.type == latest.data_type,
-    ).all()
+        # 🔥 convert RowMapping → plain dict (IMPORTANT FIX)
+        records = [dict(row) for row in result]
 
-    return {
-        "upload_date": latest.upload_date,
-        "data_date": latest.data_date,
-        "type": latest.data_type,
-        "records": records,
-    }
+        return {"records": records}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # -------------------- GET STOCK BY ISIN --------------------
 @router.get("/{isin}", response_model=StockPulseLatestResponse)
 def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
@@ -230,40 +221,42 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
     stock_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
     return {
-        "upload_date": record.upload_date,
-        "data_date": record.data_date,
-        "type": record.type,
+       
         "records": [stock_dict]
     }
 @router.put("/upload/{upload_id}")
 async def update_stockpulse_upload(
     upload_id: int,
-    files: Optional[List[UploadFile]] = File(None),  # optional new files
+    files: Optional[List[UploadFile]] = File(None),
     upload_date: Optional[date] = Form(None),
     data_date: Optional[date] = Form(None),
     data_type: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
+
     # 1️⃣ Fetch existing upload
-    upload = db.query(StockPulseUpload).filter(StockPulseUpload.id == upload_id).first()
+    upload = db.query(StockPulseUpload).filter(
+        StockPulseUpload.id == upload_id
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # 2️⃣ Delete old data rows for this upload
+    # 2️⃣ DELETE OLD DATA (ONLY BASED ON UPLOAD ID RELATIONSHIP)
+    # ❗ You MUST ensure StockPulseData has upload_id column
     db.query(StockPulseData).filter(
-        StockPulseData.data_date == upload.data_date,
-        StockPulseData.type == upload.data_type
+        StockPulseData.upload_id == upload.id
     ).delete(synchronize_session=False)
 
     all_records = []
 
-    # Columns that require type conversion
     date_cols = [
         "wkhdt_52", "wkldt_52",
         "wkhvdt_52", "wklvdt_52",
         "myrhdt", "myrldt",
         "myruhdt", "myruldt"
     ]
+
     numeric_cols = [
         "fv", "cmp",
         "dma_5", "dma_21", "dma_60", "dma_245",
@@ -275,28 +268,28 @@ async def update_stockpulse_upload(
         "pulse_score"
     ]
 
-    # 3️⃣ Process new files if provided
     if files:
         for file in files:
-            # Delete old S3 file if replacing
+
             if upload.file_path:
                 delete_file_from_s3(upload.file_path)
 
-            # Upload new file to S3
-            s3_key = upload_file_to_s3(file.file, f"stockpulse/{uuid4()}_{file.filename}")
+            s3_key = upload_file_to_s3(
+                file.file,
+                f"stockpulse/{uuid4()}_{file.filename}"
+            )
+
             upload.file_name = file.filename
             upload.file_path = s3_key
 
-            # Read file directly from S3
             s3_file = get_file_stream_from_s3(s3_key)
             df = read_stockpulse_file(s3_file)
 
-            # Drop unwanted column and validate
             df = df.drop(df.columns[31], axis=1)
-            if df.shape[1] != 32:
-                raise HTTPException(400, "Excel must have exactly 32 columns after cleanup")
 
-            # Assign column names
+            if df.shape[1] != 32:
+                raise HTTPException(400, "Excel must have exactly 32 columns")
+
             df.columns = [
                 "scrip_code", "scrip", "co_code", "isin", "fv", "cmp",
                 "dma_5", "dma_21", "dma_60", "dma_245",
@@ -313,23 +306,20 @@ async def update_stockpulse_upload(
                 "pulse_score"
             ]
 
-            # Clean NaNs
-            df = df.replace({np.nan: None, "nan": None, "NaN": None})
+            df = df.replace({np.nan: None})
 
-            # Convert date columns
             for col in date_cols:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
-            df[date_cols] = df[date_cols].where(df[date_cols].notna(), None)
 
-            # Convert numeric columns
             for col in numeric_cols:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-            df[numeric_cols] = df[numeric_cols].where(df[numeric_cols].notna(), None)
 
-            # Prepare DB records
+            df = df.where(pd.notnull(df), None)
+
             for _, row in df.iterrows():
                 all_records.append(
                     StockPulseData(
+                        upload_id=upload.id,   # ✅ IMPORTANT LINK
                         scrip_code=str(row["scrip_code"]),
                         scrip=str(row["scrip"]),
                         co_code=str(row["co_code"]),
@@ -361,22 +351,21 @@ async def update_stockpulse_upload(
                         myruhdt=row["myruhdt"],
                         myrul=row["myrul"],
                         myruldt=row["myruldt"],
-                        pulse_score=row["pulse_score"],
-                        type=data_type or upload.type,
-                        upload_date=upload_date or upload.upload_date,
-                        data_date=data_date or upload.data_date
+                        pulse_score=row["pulse_score"]
                     )
                 )
 
-    # 4️⃣ Update metadata even if no new file
+    # 3️⃣ UPDATE ONLY METADATA TABLE
     if upload_date:
         upload.upload_date = upload_date
+
     if data_date:
         upload.data_date = data_date
+
     if data_type:
         upload.type = data_type
 
-    # 5️⃣ Save new records if any
+    # 4️⃣ INSERT NEW DATA
     if all_records:
         db.bulk_save_objects(all_records)
 
@@ -387,20 +376,17 @@ async def update_stockpulse_upload(
         "upload_id": upload.id,
         "records_inserted": len(all_records)
     }
-# -------------------- DELETE --------------------
+    
 @router.delete("/uploads/{upload_id}")
 def delete_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(StockPulseUpload).filter(StockPulseUpload.id == upload_id).first()
+
+    upload = db.query(StockPulseUpload).filter(
+        StockPulseUpload.id == upload_id
+    ).first()
+
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # Delete data rows
-    db.query(StockPulseData).filter(
-        StockPulseData.data_date == upload.data_date,
-        StockPulseData.type == upload.data_type
-    ).delete(synchronize_session=False)
-
-    # Delete file from S3
     if upload.file_path:
         delete_file_from_s3(upload.file_path)
 

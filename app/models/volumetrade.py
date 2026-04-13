@@ -6,8 +6,7 @@ class VolumeTradevolume(Base):
     __tablename__ = "top_volume"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
+   
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
     mcap = Column(Float, nullable=True)
@@ -21,15 +20,13 @@ class VolumeTradevolume(Base):
     two_four_five_dvma = Column(Integer, nullable=True)
     five_two_wkhv = Column(Integer, nullable=True)
     five_two_wklv = Column(Integer, nullable=True)
-    group_id = Column(String(36), index=True, nullable=False)
 
 # Tab 2 Table
 class VolumeTradevalue(Base):
     __tablename__ = "top_value"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
+    
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
     mcap = Column(Float, nullable=True)
@@ -43,15 +40,13 @@ class VolumeTradevalue(Base):
     two_four_five_dvma = Column(Integer, nullable=True)
     five_two_wkhv = Column(Integer, nullable=True)
     five_two_wklv = Column(Integer, nullable=True)
-    group_id = Column(String(36), index=True, nullable=False)
 
 # Tab 3 Table
 class VolumeTradetrade(Base):
     __tablename__ = "top_trade"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
+   
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
     mcap = Column(Float, nullable=True)
@@ -65,7 +60,6 @@ class VolumeTradetrade(Base):
     two_four_five_dvma = Column(Integer, nullable=True)
     five_two_wkhv = Column(Integer, nullable=True)
     five_two_wklv = Column(Integer, nullable=True)
-    group_id = Column(String(36), index=True, nullable=False)
 class VolumeTradeUpload(Base):
     __tablename__ = "volumetrade_upload"
 
