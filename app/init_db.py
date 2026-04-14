@@ -4,7 +4,12 @@ from app.models.marketind import StockData,MarketIndicatorUpload
 from app.models.marketindgraph import MktGraph, MktGraphUploads
 from app.models.auth import User
 from app.models.instocktrend import InstockTrendData,Indstocktrendupload
-from app.models.mostvalued import Mostvalued,MostValuedupload
+from app.models.mostvalued import (
+    MostValuedStock,
+    MostValuedHouses,
+    MostValuedStockUpload,
+    MostValuedHousesUpload
+)
 from app.models.ipo import DataUpload,IPOUpload
 from app.models.snapshot import Snapshot
 from app.models.curtainraiser import CurtainRaiser
