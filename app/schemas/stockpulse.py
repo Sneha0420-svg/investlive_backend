@@ -51,14 +51,12 @@ class StockPulseDataSchema(BaseModel):
 
 class StockPulseUploadSchema(BaseModel):
     id: int
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str
     file_link: str
 
 class StockPulseLatestResponse(BaseModel):
-    upload_date: date
     data_date: date
     type: str
     records: List[StockPulseDataSchema]

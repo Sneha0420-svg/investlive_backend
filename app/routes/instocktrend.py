@@ -35,7 +35,6 @@ def get_db():
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     data_type: str = Form(...),
     db: Session = Depends(get_db)
@@ -56,7 +55,6 @@ async def upload_multiple_data(
 
             # Save upload metadata
             upload_record = Indstocktrendupload(
-                upload_date=upload_date,
                 data_date=data_date,
                 data_type=data_type,
                 file_name=file.filename,
@@ -109,7 +107,6 @@ async def upload_multiple_data(
                         halfyear=str(row["halfyear"]),
                         year=str(row["year"]),
                         type=data_type,
-                        upload_date=upload_date,
                         data_date=data_date
                     )
                 )
@@ -139,7 +136,7 @@ async def upload_multiple_data(
 def get_uploads(db: Session = Depends(get_db)):
 
     uploads = db.query(Indstocktrendupload).order_by(
-        Indstocktrendupload.upload_date.desc()
+        Indstocktrendupload.data_date.desc()
     ).all()
 
     if not uploads:
@@ -148,7 +145,6 @@ def get_uploads(db: Session = Depends(get_db)):
     return [
         {
             "id": u.id,
-            "upload_date": u.upload_date,
             "data_date": u.data_date,
             "data_type": u.data_type,
             "file_name": u.file_name,
@@ -185,7 +181,6 @@ def download_file(upload_id: int, db: Session = Depends(get_db)):
 def get_latest_stock_data(db: Session = Depends(get_db)):
 
     latest = db.query(Indstocktrendupload).order_by(
-        desc(Indstocktrendupload.upload_date),
         desc(Indstocktrendupload.data_date)
     ).first()
 
@@ -193,7 +188,6 @@ def get_latest_stock_data(db: Session = Depends(get_db)):
         raise HTTPException(404, "No uploads found")
 
     stocks = db.query(InstockTrendData).filter(
-        InstockTrendData.upload_date == latest.upload_date,
         InstockTrendData.data_date == latest.data_date,
         InstockTrendData.type == latest.data_type
     ).order_by(InstockTrendData.id).all()
@@ -202,7 +196,6 @@ def get_latest_stock_data(db: Session = Depends(get_db)):
         raise HTTPException(404, "No stock data found")
 
     return {
-        "upload_date": latest.upload_date,
         "data_date": latest.data_date,
         "type": latest.data_type,
         "stocks": [
@@ -234,7 +227,6 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Upload not found")
 
     deleted_rows = db.query(InstockTrendData).filter(
-        InstockTrendData.upload_date == upload.upload_date,
         InstockTrendData.data_date == upload.data_date,
         InstockTrendData.type == upload.data_type
     ).delete(synchronize_session=False)
@@ -256,7 +248,6 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
 async def update_upload(
     upload_id: int,
     file: UploadFile = File(None),
-    upload_date: date = Form(None),
     data_date: date = Form(None),
     db: Session = Depends(get_db)
 ):
@@ -268,8 +259,7 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
+
 
     if data_date:
         upload.data_date = data_date
@@ -289,7 +279,6 @@ async def update_upload(
         upload.file_path = s3_key
 
         db.query(InstockTrendData).filter(
-            InstockTrendData.upload_date == upload.upload_date,
             InstockTrendData.data_date == upload.data_date,
             InstockTrendData.type == upload.data_type
         ).delete(synchronize_session=False)
@@ -326,7 +315,6 @@ async def update_upload(
                 halfyear=str(row["halfyear"]),
                 year=str(row["year"]),
                 type=upload.data_type,
-                upload_date=upload.upload_date,
                 data_date=upload.data_date
             )
             for _, row in df.iterrows()
@@ -341,7 +329,6 @@ async def update_upload(
         "message": "Upload updated successfully",
         "upload_id": upload.id,
         "file_name": upload.file_name,
-        "upload_date": upload.upload_date,
         "data_date": upload.data_date,
         "records_inserted": len(new_records)
     }

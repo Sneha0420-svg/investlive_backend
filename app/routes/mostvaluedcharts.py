@@ -70,7 +70,6 @@ from sqlalchemy import text
 @router.post("/{category}/upload")
 async def upload_file(
     category: str,
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -113,7 +112,6 @@ async def upload_file(
     # ==============================
     upload_row = UploadModel(
         group_id=group_id,
-        upload_date=upload_date,
         data_date=data_date,
         data_type=category,
         file_name=file.filename,
@@ -140,12 +138,11 @@ def get_all_uploads(db: Session = Depends(get_db)):
     all_uploads = []
     for category in ["company", "house"]:
         _, UploadModel, _ = get_models(category)
-        uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+        uploads = db.query(UploadModel).order_by(UploadModel.data_date.desc()).all()
         for u in uploads:
             all_uploads.append({
                 "group_id": u.group_id,
                 "file_name": u.file_name,
-                "upload_date": u.upload_date,
                 "data_date": u.data_date,
                 "category": category,
                 "file_s3_url": get_s3_file_url(u.file_path)
@@ -184,7 +181,6 @@ def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
 async def update_upload(
     category: str,
     group_id: str,
-    upload_date: date = Form(None),
     data_date: date = Form(None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
@@ -194,8 +190,6 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
     if data_date:
         upload.data_date = data_date
 

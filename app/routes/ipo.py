@@ -60,7 +60,6 @@ def clean_objs(objs):
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
     upload_date: date = Form(...),
-    data_date: date = Form(...),
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
@@ -82,7 +81,6 @@ async def upload_multiple_data(
         # Create IPOUpload record
         upload_record = IPOUpload(
             upload_date=upload_date,
-            data_date=data_date,
             data_type=data_type,
             file_name=file.filename,
             file_path=s3_key
@@ -176,7 +174,6 @@ async def upload_multiple_data(
                     mktmkr4=row.get("MKTMKR4"),
                     mktmkr5=row.get("MKTMKR5"),
                     upload_date=upload_date,
-                    data_date=data_date
                 )
             )
 
@@ -187,7 +184,6 @@ async def upload_multiple_data(
             UploadSummaryResponse(
                 id=upload_record.id,
                 upload_date=upload_record.upload_date,
-                data_date=upload_record.data_date,
                 data_type=upload_record.data_type,
                 file_name=upload_record.file_name,
                 file_link=presigned_url,
@@ -207,7 +203,6 @@ def get_uploads_summary(db: Session = Depends(get_db)):
         {
             "id": u.id,
             "upload_date": u.upload_date,
-            "data_date": u.data_date,
             "data_type": u.data_type,
             "file_name": u.file_name,
             "file_link": f"/IPO/files/{u.id}",
@@ -223,7 +218,6 @@ def get_latest_all(db: Session = Depends(get_db)):
 
     latest_upload = db.query(
         DataUpload.upload_date,
-        DataUpload.data_date
     ).order_by(DataUpload.upload_date.desc()).first()
 
     if not latest_upload:
@@ -231,12 +225,10 @@ def get_latest_all(db: Session = Depends(get_db)):
 
     rows = db.query(DataUpload).filter(
         DataUpload.upload_date == latest_upload.upload_date,
-        DataUpload.data_date == latest_upload.data_date
     ).order_by(DataUpload.isin).all()
 
     return {
         "upload_date": latest_upload.upload_date,
-        "data_date": latest_upload.data_date,
         "data": clean_objs(rows)
     }
 
@@ -266,7 +258,6 @@ async def update_upload(
     db: Session = Depends(get_db),
     file: UploadFile = File(None),
     upload_date: date | None = Form(None),
-    data_date: date | None = Form(None),
     data_type: str | None = Form(None)
 ):
 
@@ -279,8 +270,7 @@ async def update_upload(
     if upload_date:
         upload.upload_date = upload_date
 
-    if data_date:
-        upload.data_date = data_date
+
 
     if data_type:
         upload.data_type = data_type
@@ -305,7 +295,6 @@ async def update_upload(
         # Delete old IPO data
         db.query(DataUpload).filter(
             DataUpload.upload_date == upload.upload_date,
-            DataUpload.data_date == upload.data_date
         ).delete(synchronize_session=False)
 
         # Read file for processing
@@ -394,7 +383,6 @@ async def update_upload(
                     mktmkr4=row.get("MKTMKR4"),
                     mktmkr5=row.get("MKTMKR5"),
                     upload_date=upload.upload_date,
-                    data_date=upload.data_date
                 )
             )
 
@@ -408,7 +396,6 @@ async def update_upload(
     return {
     "id": upload.id,
     "upload_date": upload.upload_date,
-    "data_date": upload.data_date,
     "data_type": upload.data_type,
     "file_name": upload.file_name,
     "file_link": f"/IPO/files/{upload.id}",
@@ -425,7 +412,6 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db)):
 
     db.query(DataUpload).filter(
         DataUpload.upload_date == upload.upload_date,
-        DataUpload.data_date == upload.data_date
     ).delete(synchronize_session=False)
 
     delete_file_from_s3(upload.file_path)

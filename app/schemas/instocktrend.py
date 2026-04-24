@@ -18,7 +18,6 @@ class InstockTrendResponse(BaseModel):
         orm_mode = True
 
 class InstockTrendUploadWise(BaseModel):
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str | None

@@ -61,6 +61,7 @@ async def upload_single_data(
     mkt_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
+    # ---------------- Validate File ----------------
     if not file.filename:
         raise HTTPException(400, "No file provided")
 
@@ -93,7 +94,7 @@ async def upload_single_data(
     db.commit()
     db.refresh(upload_record)
 
-    # ---------------- Read DataFrame ----------------
+    # ---------------- Read File into DataFrame ----------------
     try:
         if file.filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(io.BytesIO(contents), header=None)
@@ -105,12 +106,13 @@ async def upload_single_data(
             f"Failed reading {file.filename}: {str(e)}"
         )
 
-    # Validate column count
+    # ---------------- Validate Columns ----------------
     if df.shape[1] < 9:
         raise HTTPException(
             400,
             f"{file.filename} must contain minimum 9 columns"
         )
+
     df = df.iloc[:, :9]
 
     df.columns = [
@@ -125,40 +127,44 @@ async def upload_single_data(
         "ID"
     ]
 
-    # ---------------- Delete Existing Data for the Same Date ----------------
-    deleted_rows = db.query(StockData).filter(
-        StockData.mkt_date == mkt_date
-    ).delete()
-    db.commit()
+    # ---------------- Delete ALL Old Data + Insert New ----------------
+    try:
+        # Delete entire table data
+        deleted_rows = db.query(StockData).delete()
 
-    # ---------------- Convert to DB objects ----------------
-    records = []
-    for _, row in df.iterrows():
-        record = StockData(
-            name=str(row["name"]).strip() if row["name"] else "",
-            yr_ago=safe_float(row["yr_ago"]),
-            curnt=safe_float(row["curnt"]),
-            ch=safe_float(row["ch"]),
-            H_ID=safe_int(row["H_ID"]),
-            S_ID=safe_int(row["S_ID"]),
-            IDX_ID=safe_int(row["IDX_ID"]),
-            flag=str(row["flag"]).strip() if row["flag"] else "",
-            ID=safe_int(row["ID"]),
-            mkt_date=mkt_date
-        )
-        records.append(record)
+        # Prepare new records
+        records = []
+        for _, row in df.iterrows():
+            record = StockData(
+                name=str(row["name"]).strip() if row["name"] else "",
+                yr_ago=safe_float(row["yr_ago"]),
+                curnt=safe_float(row["curnt"]),
+                ch=safe_float(row["ch"]),
+                H_ID=safe_int(row["H_ID"]),
+                S_ID=safe_int(row["S_ID"]),
+                IDX_ID=safe_int(row["IDX_ID"]),
+                flag=str(row["flag"]).strip() if row["flag"] else "",
+                ID=safe_int(row["ID"]),
+                mkt_date=mkt_date
+            )
+            records.append(record)
 
-    db.bulk_save_objects(records)
-    db.commit()
+        db.bulk_save_objects(records)
 
+        # Commit everything together
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Database operation failed: {str(e)}")
+
+    # ---------------- Response ----------------
     return {
         "message": f"File '{file.filename}' uploaded successfully",
         "deleted_old_rows": deleted_rows,
         "records_inserted": len(records),
         "upload_id": upload_record.id
     }
-
-
 # ======================================================
 # Get All Uploads
 # ======================================================

@@ -25,7 +25,6 @@ class IPOHeatmapYearRead(IPOHeatmapYearBase):
 # Schemas for Yearly Uploads
 # -----------------------------
 class IPOHeatmapYearUploadBase(BaseModel):
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str
@@ -65,7 +64,6 @@ class IPOHeatmapDataRead(IPOHeatmapDataBase):
 # Schemas for IPO Data Uploads
 # -----------------------------
 class IPOHeatmapDataUploadBase(BaseModel):
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str

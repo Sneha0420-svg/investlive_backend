@@ -16,7 +16,6 @@ class VolumetradeBase(BaseModel):
     two_four_five_dvma: Optional[str]
     five_two_wkhv: Optional[str]
     five_two_wklv: Optional[str]
-    upload_date: date
     data_date: date
 
 class DataUploadCreate(VolumetradeBase):
@@ -27,7 +26,6 @@ class DataUploadResponse(VolumetradeBase):
     id: int
 class UploadSummaryResponse(BaseModel):
     id: int
-    upload_date: date
     data_date: date
     data_type: str
     file_name1: Optional[str]
@@ -38,7 +36,6 @@ class UploadSummaryResponse(BaseModel):
     file_link3: Optional[str]
 class UploadSummaryMultiFiles(BaseModel):
     id: int
-    upload_date: date
     data_date: date
 
     file_name1: Optional[str] = None

@@ -19,7 +19,6 @@ class MostvalueResponse(BaseModel):
         orm_mode = True
 
 class MostvalueUploadWise(BaseModel):
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str | None

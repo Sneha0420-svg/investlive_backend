@@ -95,7 +95,6 @@ from sqlalchemy.exc import SQLAlchemyError
 # ---------------- Upload API ----------------
 @router.post("/upload/")
 async def upload_file(
-    upload_date: str = Form(...),
     data_date: str = Form(...),
     data_type: str = Form(...),
     file: UploadFile = File(...),
@@ -132,7 +131,6 @@ async def upload_file(
 
     upload_entry = UploadModel(
         group_id=str(uuid.uuid4()),
-        upload_date=datetime.strptime(upload_date, "%Y-%m-%d").date(),
         data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
         data_type=data_type,
         file_name=file.filename,
@@ -200,7 +198,7 @@ def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
     UploadModel = UPLOAD_TABLES[data_type]
-    uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+    uploads = db.query(UploadModel).order_by(UploadModel.data_date.desc()).all()
 
     uploads_with_url = []
     for upload in uploads:

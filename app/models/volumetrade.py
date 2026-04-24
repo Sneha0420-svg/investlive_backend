@@ -6,7 +6,6 @@ class VolumeTradevolume(Base):
     __tablename__ = "top_volume"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
@@ -28,7 +27,6 @@ class VolumeTradevalue(Base):
     __tablename__ = "top_value"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
@@ -50,7 +48,6 @@ class VolumeTradetrade(Base):
     __tablename__ = "top_trade"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     company = Column(String, nullable=True)
     isin = Column(String, index=True, nullable=True)
@@ -71,7 +68,6 @@ class VolumeTradeUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True, nullable=False)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(100), nullable=False)  # "tab1", "tab2", "tab3"
     file_name = Column(String(255), nullable=False)

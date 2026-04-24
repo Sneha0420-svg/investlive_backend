@@ -45,7 +45,6 @@ from sqlalchemy.exc import SQLAlchemyError
 @router.post("/upload")
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     data_type: str = Form(...),
     db: Session = Depends(get_db)
@@ -74,7 +73,6 @@ async def upload_multiple_data(
 
             # ✅ Save metadata (keep history)
             upload_record = StockPulseUpload(
-                upload_date=upload_date,
                 data_date=data_date,
                 data_type=data_type,
                 file_name=file.filename,
@@ -132,7 +130,6 @@ async def upload_multiple_data(
             for r in records:
                 r.update({
                     "type": data_type,
-                    "upload_date": upload_date,
                     "data_date": data_date
                 })
 
@@ -162,11 +159,10 @@ async def upload_multiple_data(
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads", response_model=List[StockPulseUploadSchema])
 def list_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(StockPulseUpload).order_by(desc(StockPulseUpload.upload_date)).all()
+    uploads = db.query(StockPulseUpload).order_by(desc(StockPulseUpload.data_date)).all()
     return [
         {
             "id": u.id,
-            "upload_date": u.upload_date,
             "data_date": u.data_date,
             "data_type": u.data_type,
             "file_name": u.file_name,
@@ -197,7 +193,6 @@ def download(upload_id: int, db: Session = Depends(get_db)):
 @router.get("/latest", response_model=StockPulseLatestResponse)
 def latest_stockpulse(db: Session = Depends(get_db)):
     latest = db.query(StockPulseUpload).order_by(
-        desc(StockPulseUpload.upload_date),
         desc(StockPulseUpload.data_date),
     ).first()
 
@@ -210,7 +205,6 @@ def latest_stockpulse(db: Session = Depends(get_db)):
     ).all()
 
     return {
-        "upload_date": latest.upload_date,
         "data_date": latest.data_date,
         "type": latest.data_type,
         "records": records,
@@ -230,7 +224,6 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
     stock_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
     return {
-        "upload_date": record.upload_date,
         "data_date": record.data_date,
         "type": record.type,
         "records": [stock_dict]
@@ -239,7 +232,6 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
 async def update_stockpulse_upload(
     upload_id: int,
     files: Optional[List[UploadFile]] = File(None),  # optional new files
-    upload_date: Optional[date] = Form(None),
     data_date: Optional[date] = Form(None),
     data_type: Optional[str] = Form(None),
     db: Session = Depends(get_db)
@@ -363,14 +355,12 @@ async def update_stockpulse_upload(
                         myruldt=row["myruldt"],
                         pulse_score=row["pulse_score"],
                         type=data_type or upload.type,
-                        upload_date=upload_date or upload.upload_date,
                         data_date=data_date or upload.data_date
                     )
                 )
 
     # 4️⃣ Update metadata even if no new file
-    if upload_date:
-        upload.upload_date = upload_date
+   
     if data_date:
         upload.data_date = data_date
     if data_type:

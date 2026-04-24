@@ -65,7 +65,6 @@ def read_file(file_bytes: bytes, expected_cols: int, columns: list):
 @router.post("/upload/{category}")
 async def upload_data(
     category: str,
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -138,7 +137,6 @@ async def upload_data(
     # UPLOAD RECORD
     # =========================
     upload_row = UploadModel(
-        upload_date=upload_date,
         data_date=data_date,
         file_name=file.filename,
         file_path=s3_key
@@ -204,13 +202,12 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
     _, UploadModel, _ = get_models(category)
 
     uploads = db.query(UploadModel).order_by(
-        UploadModel.upload_date.desc()
+        UploadModel.data_date.desc()
     ).all()
 
     return [
         {
             "id": u.id,
-            "upload_date": u.upload_date,
             "data_date": u.data_date,
             "file_name": u.file_name,
             "file_url": get_s3_file_url(u.file_path)
@@ -249,7 +246,6 @@ def download(category: str, upload_id: int, db: Session = Depends(get_db)):
 async def update_upload(
     category: str,
     upload_id: int,
-    upload_date: date = Form(None),
     data_date: date = Form(None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
@@ -269,8 +265,7 @@ async def update_upload(
     # =========================
     # UPDATE METADATA
     # =========================
-    if upload_date:
-        upload.upload_date = upload_date
+
 
     if data_date:
         upload.data_date = data_date
@@ -353,7 +348,6 @@ async def update_upload(
         "message": f"{category} upload updated successfully",
         "upload_id": upload.id,
         "file_name": upload.file_name,
-        "upload_date": upload.upload_date,
         "data_date": upload.data_date,
         "records_inserted": len(new_records)
     }

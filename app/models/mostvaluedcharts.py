@@ -23,7 +23,6 @@ class MostValCompanyChartUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     group_id = Column(String(50), nullable=False, unique=True, index=True)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(50), default="MostValCompanyChart")
     file_name = Column(String(255), nullable=False)
@@ -52,7 +51,6 @@ class MostValHouseChartUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # <-- added autoincrement
     group_id = Column(String(50), nullable=False, unique=True, index=True)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(50), default="MostValHouseChart")
     file_name = Column(String(255), nullable=False)

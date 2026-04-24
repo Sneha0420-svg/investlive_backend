@@ -51,7 +51,6 @@ class DataUploadBase(BaseModel):
     mktmkr4: Optional[str]
     mktmkr5: Optional[str]
     upload_date: date
-    data_date: date
 
 class DataUploadCreate(DataUploadBase):
     pass
@@ -67,7 +66,6 @@ class DataUploadResponse(DataUploadBase):
 class UploadSummaryResponse(BaseModel):
     id: int
     upload_date: date
-    data_date: date
     data_type: str
     file_name: str
     file_link: str

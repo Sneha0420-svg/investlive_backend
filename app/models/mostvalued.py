@@ -38,7 +38,6 @@ class MostValuedHousesUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
 
     file_name = Column(String(255), nullable=False)
@@ -49,7 +48,6 @@ class MostValuedStockUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
 
     file_name = Column(String(255), nullable=False)

@@ -216,7 +216,6 @@ class CompanyUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True)
-    upload_date = Column(Date)
     data_date = Column(Date)
     data_type = Column(String(100))
     file_name = Column(String(255))
@@ -228,7 +227,6 @@ class HouseUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True)
-    upload_date = Column(Date)
     data_date = Column(Date)
     data_type = Column(String(100))
     file_name = Column(String(255))
@@ -240,7 +238,6 @@ class IndustryUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True)
-    upload_date = Column(Date)
     data_date = Column(Date)
     data_type = Column(String(100))
     file_name = Column(String(255))
@@ -252,7 +249,6 @@ class SectorUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True)
-    upload_date = Column(Date)
     data_date = Column(Date)
     data_type = Column(String(100))
     file_name = Column(String(255))

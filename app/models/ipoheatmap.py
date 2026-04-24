@@ -23,7 +23,6 @@ class IPOHeatmapYearUpload(Base):
     __tablename__ = "ipo_heatmap_yearwise_uploads"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False, default=datetime.utcnow)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(100), nullable=False)
     file_name = Column(String(255), nullable=False)
@@ -53,7 +52,6 @@ class IPOHeatmapDataUpload(Base):
     __tablename__ = "ipo_heatmap_data_upload"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=False, default=datetime.utcnow)
     data_date = Column(Date, nullable=False)
     data_type = Column(String(100), nullable=False)
     file_name = Column(String(255), nullable=False)

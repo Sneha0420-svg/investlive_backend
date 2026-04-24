@@ -79,7 +79,6 @@ from sqlalchemy import text
 async def upload_volume_trade(
     files: List[UploadFile] = File(...),
     data_types: List[str] = Form(...),
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
@@ -105,7 +104,6 @@ async def upload_volume_trade(
         # Store upload metadata (KEEP SAFE)
         upload_record = VolumeTradeUpload(
             group_id=group_id,
-            upload_date=upload_date,
             data_date=data_date,
             data_type=data_type,
             file_name=file.filename,
@@ -120,7 +118,6 @@ async def upload_volume_trade(
         for _, row in df.iterrows():
             all_records.append(
                 Model(
-                    upload_date=upload_date,
                     data_date=data_date,
                     **row.to_dict(),
                     group_id=group_id
@@ -162,17 +159,15 @@ def get_latest(tab: str = "volume", db: Session = Depends(get_db)):
         raise HTTPException(400, "Invalid tab. Must be volume, value, or trade")
 
     Model = TAB_MODEL_MAPPING[tab]
-    latest_upload = db.query(Model.upload_date, Model.data_date).order_by(Model.upload_date.desc()).first()
+    latest_upload = db.query(Model.data_date).order_by(Model.data_date.desc()).first()
     if not latest_upload:
         raise HTTPException(404, "No data found")
 
     rows = db.query(Model).filter(
-        Model.upload_date == latest_upload.upload_date,
         Model.data_date == latest_upload.data_date
     ).order_by(Model.isin).all()
 
     return {
-        "upload_date": latest_upload.upload_date,
         "data_date": latest_upload.data_date,
         "data": [vars(r) for r in rows]
     }
@@ -180,14 +175,13 @@ def get_latest(tab: str = "volume", db: Session = Depends(get_db)):
 # -------------------- LIST UPLOADS --------------------
 @router.get("/uploads")
 def get_uploads_summary(db: Session = Depends(get_db)):
-    uploads = db.query(VolumeTradeUpload).order_by(VolumeTradeUpload.upload_date.desc()).all()
+    uploads = db.query(VolumeTradeUpload).order_by(VolumeTradeUpload.data_date.desc()).all()
     grouped = {}
 
     for u in uploads:
         if u.group_id not in grouped:
             grouped[u.group_id] = {
                 "group_id": u.group_id,
-                "upload_date": u.upload_date,
                 "data_date": u.data_date,
                 "volume": None,
                 "value": None,
@@ -220,7 +214,6 @@ def download_file(tab: str, group_id: str, db: Session = Depends(get_db)):
 async def update_upload_group(
     group_id: str,
     db: Session = Depends(get_db),
-    upload_date: date | None = Form(None),
     data_date: date | None = Form(None),
     volume_file: UploadFile | None = File(None),
     value_file: UploadFile | None = File(None),
@@ -233,8 +226,7 @@ async def update_upload_group(
     file_map = {"volume": volume_file, "value": value_file, "trade": trade_file}
 
     for upload in uploads:
-        if upload_date:
-            upload.upload_date = upload_date
+     
         if data_date:
             upload.data_date = data_date
 
@@ -259,7 +251,7 @@ async def update_upload_group(
 
         # Read new data
         df = read_file_bytes(file_bytes, upload.data_type)
-        records = [Model(**row.to_dict(), upload_date=upload.upload_date, data_date=upload.data_date, group_id=group_id)
+        records = [Model(**row.to_dict(), data_date=upload.data_date, group_id=group_id)
                    for _, row in df.iterrows()]
         db.bulk_save_objects(records)
 

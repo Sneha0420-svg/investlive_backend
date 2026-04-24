@@ -46,7 +46,6 @@ UPLOAD_TABLES = {
 
 @router.post("/upload/")
 async def upload_file(
-    upload_date: str = Form(...),
     data_date: str = Form(...),
     data_type: str = Form(...),
     files: List[UploadFile] = File(...),
@@ -148,7 +147,6 @@ async def upload_file(
         # ---------- Save metadata ----------
         upload_entry = UploadModel(
             group_id=str(uuid.uuid4()),
-            upload_date=datetime.strptime(upload_date, "%Y-%m-%d").date(),
             data_date=datetime.strptime(data_date, "%Y-%m-%d").date(),
             data_type=data_type,
             file_name=",".join([f.filename for f in files]),
@@ -184,94 +182,101 @@ def get_all_uploads(data_type: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
     UploadModel = UPLOAD_TABLES[data_type]
-    return db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+    return db.query(UploadModel).order_by(UploadModel.data_date.desc()).all()
 
-# ---------------- Latest upload (full file) ----------------
 @router.get("/{data_type}/latest-data-file/")
 def get_latest_upload_file(data_type: str, db: Session = Depends(get_db)):
+
     data_type = data_type.lower()
+
     if data_type not in TABLE_MAP:
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
-    _, UploadModel, expected_columns = TABLE_MAP[data_type]
+    Model, _, _ = TABLE_MAP[data_type]
 
-    latest = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest:
-        raise HTTPException(status_code=404, detail="No uploads found")
 
-    file_stream = get_file_stream_from_s3(latest.file_path)
-    if not file_stream:
-        raise HTTPException(status_code=404, detail="File not found on S3")
+    result = (
+        db.query(Model)
+        .all()
+    )
 
-    df = pd.read_csv(file_stream, header=None)
-    df.columns = expected_columns
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    return result
 
-# ---------------- Latest upload filtered by ISIN ----------------
 @router.get("/{data_type}/latest-data-file/{isin}")
 def get_latest_upload_by_isin(data_type: str, isin: str, db: Session = Depends(get_db)):
+
     data_type = data_type.lower()
+
     if data_type not in TABLE_MAP:
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
-    _, UploadModel, expected_columns = TABLE_MAP[data_type]
+    Model, _, _ = TABLE_MAP[data_type]
 
-    latest = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
-    if not latest:
-        raise HTTPException(status_code=404, detail="No uploads found")
+    result = (
+        db.query(Model)
+        .filter(Model.ISIN == isin.strip())
+        .all()
+    )
 
-    file_stream = get_file_stream_from_s3(latest.file_path)
-    if not file_stream:
-        raise HTTPException(status_code=404, detail="File not found on S3")
-
-    df = pd.read_csv(file_stream, header=None)
-    df.columns = expected_columns
-    df = df.where(pd.notnull(df), None)
-
-    df["ISIN"] = df["ISIN"].astype(str).str.strip()
-    isin = isin.strip()
-    filtered = df[df["ISIN"] == isin]
-
-    if filtered.empty:
+    if not result:
         raise HTTPException(status_code=404, detail="No records found for this ISIN")
 
-    return filtered.to_dict(orient="records")
-
-# ---------------- Download file from S3 ----------------
+    return result
 @router.get("/{data_type}/files/{upload_id}")
-def download_file_presigned(
+def download_combined_csv(
     data_type: str,
     upload_id: int,
     db: Session = Depends(get_db),
 ):
     data_type = data_type.lower()
+
     if data_type not in UPLOAD_TABLES:
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
     UploadModel = UPLOAD_TABLES[data_type]
     upload = db.query(UploadModel).filter(UploadModel.id == upload_id).first()
+
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
     if not upload.file_path:
         raise HTTPException(status_code=404, detail="File path not set")
 
-    # ✅ Use presigned URL instead of streaming
-    presigned_url = get_s3_file_url(upload.file_path)
-    if not presigned_url:
-        raise HTTPException(status_code=404, detail="File not found on S3")
+    # 🔥 Split multiple S3 keys
+    file_keys = upload.file_path.split(",")
 
-    return {
-        "file_name": upload.file_name,
-        "url": presigned_url
-    }
+    dfs = []
+
+    try:
+        for key in file_keys:
+            file_stream = get_file_stream_from_s3(key.strip())
+
+            df = pd.read_csv(file_stream, header=None)
+            dfs.append(df)
+
+        # Merge all CSVs
+        final_df = pd.concat(dfs, ignore_index=True)
+
+        # Convert to CSV
+        stream = io.StringIO()
+        final_df.to_csv(stream, index=False)
+        stream.seek(0)
+
+        return StreamingResponse(
+            iter([stream.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={data_type}.csv"
+            },
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # ---------------- Update upload ----------------
 @router.put("/{data_type}/{upload_id}/")
 async def update_upload(
     data_type: str,
     upload_id: int,
-    upload_date: str = Form(None),
     data_date: str = Form(None),
     new_data_type: str = Form(None),
     file: UploadFile = File(None),
@@ -286,9 +291,7 @@ async def update_upload(
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    # Update dates
-    if upload_date:
-        upload.upload_date = datetime.strptime(upload_date, "%Y-%m-%d").date()
+  
     if data_date:
         upload.data_date = datetime.strptime(data_date, "%Y-%m-%d").date()
 
@@ -318,7 +321,6 @@ async def update_upload(
     db.refresh(upload)
     return {
         "id": upload.id,
-        "upload_date": str(upload.upload_date),
         "data_date": str(upload.data_date),
         "data_type": upload.data_type,
         "file_name": upload.file_name,

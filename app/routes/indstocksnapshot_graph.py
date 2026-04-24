@@ -30,7 +30,6 @@ from sqlalchemy.exc import SQLAlchemyError
 # ---------------- Upload ----------------
 @router.post("/upload")
 async def upload_file(
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -86,7 +85,6 @@ async def upload_file(
 
         upload_row = IndStockGraphUpload(
             group_id=group_id,
-            upload_date=upload_date,
             data_date=data_date,
             data_type="IndStockGraph",
             file_name=file.filename,
@@ -111,9 +109,9 @@ async def upload_file(
 # ---------------- Get Uploads ----------------
 @router.get("/uploads")
 def get_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(IndStockGraphUpload).order_by(IndStockGraphUpload.upload_date.desc()).all()
+    uploads = db.query(IndStockGraphUpload).order_by(IndStockGraphUpload.data_date.desc()).all()
     return [
-        {"id": u.id, "group_id": u.group_id, "upload_date": u.upload_date,
+        {"id": u.id, "group_id": u.group_id,
          "data_date": u.data_date, "file_name": u.file_name}
         for u in uploads
     ]
@@ -176,8 +174,6 @@ def get_latest_graph_data(db: Session = Depends(get_db)):
         "records": result
     }
 # ---------------- Download File ----------------
-
-
 @router.get("/download/{group_id}")
 def download_file(group_id: str, db: Session = Depends(get_db)):
     upload = db.query(IndStockGraphUpload).filter(IndStockGraphUpload.group_id == group_id).first()
@@ -208,7 +204,6 @@ def download_file(group_id: str, db: Session = Depends(get_db)):
 @router.put("/upload/{group_id}")
 async def update_upload(
     group_id: str,
-    upload_date: date = Form(None),
     data_date: date = Form(None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
@@ -217,8 +212,6 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
     if data_date:
         upload.data_date = data_date
 

@@ -7,7 +7,6 @@ class StockPulseUpload(Base):
     __tablename__ = "stockpulse_upload"
 
     id = Column(Integer, primary_key=True, index=True)
-    upload_date = Column(Date, nullable=True)
     data_date = Column(Date, nullable=True)
     data_type = Column(String, nullable=True)
     file_name = Column(String, nullable=True)
@@ -57,9 +56,7 @@ class StockPulseData(Base):
     myruldt = Column(Date, nullable=True)
     pulse_score=Column(Integer)
 
-    data_date = Column(Date, nullable=True)
     type = Column(String, nullable=True)
-    upload_date = Column(Date, nullable=False)  # new
     data_date = Column(Date, nullable=False)    # new
     
     

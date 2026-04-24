@@ -33,7 +33,6 @@ def clean_nan(val):
 @router.post("/upload/{category}")
 async def upload_file(
     category: str,
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -153,7 +152,6 @@ async def upload_file(
     # Upload metadata
     upload_row = UploadModel(
         group_id=group_id,
-        upload_date=upload_date,
         data_date=data_date,
         category=category,
         file_name=file.filename,
@@ -183,13 +181,12 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 
     UploadModel = LMRankUpload if category == "lm_rank" else LMSubUpload
 
-    uploads = db.query(UploadModel).order_by(UploadModel.upload_date.desc()).all()
+    uploads = db.query(UploadModel).order_by(UploadModel.data_date.desc()).all()
 
     result = []
     for u in uploads:
         result.append({
             "group_id": u.group_id,
-            "upload_date": u.upload_date,
             "data_date": u.data_date,
             "category": u.category,
             "file_name": u.file_name,
@@ -269,7 +266,6 @@ def download_file(category: str, group_id: str, db: Session = Depends(get_db)):
 async def update_upload(
     category: str,
     group_id: str,
-    upload_date: date = Form(None),
     data_date: date = Form(None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db)
@@ -283,8 +279,7 @@ async def update_upload(
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
+   
 
     if data_date:
         upload.data_date = data_date

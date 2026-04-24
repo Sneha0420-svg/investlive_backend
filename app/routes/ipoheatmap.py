@@ -48,7 +48,6 @@ def get_db():
 @router.post("/year/upload-file", response_model=IPOHeatmapYearUploadRead)
 async def upload_year_file(
     file: UploadFile = File(...),
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
@@ -92,7 +91,6 @@ async def upload_year_file(
         raise HTTPException(status_code=500, detail=str(e))
 
     upload_obj = IPOHeatmapYearUpload(
-        upload_date=upload_date,
         data_date=data_date,
         data_type="Year CSV/Excel",
         file_name=file.filename,
@@ -120,7 +118,7 @@ def get_latest_year_data(db: Session = Depends(get_db)):
 @router.get("/year/uploads", response_model=List[IPOHeatmapYearUploadRead])
 def get_year_uploads(db: Session = Depends(get_db)):
     uploads = db.query(IPOHeatmapYearUpload)\
-        .order_by(IPOHeatmapYearUpload.upload_date.desc())\
+        .order_by(IPOHeatmapYearUpload.data_date.desc())\
         .all()
 
     result = []
@@ -153,7 +151,6 @@ def download_year_file(upload_id: int, db: Session = Depends(get_db)):
 async def update_year_upload(
     upload_id: int,
     file: UploadFile | None = File(None),
-    upload_date: date | None = Form(None),
     data_date: date | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -161,8 +158,7 @@ async def update_year_upload(
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
+
     if data_date:
         upload.data_date = data_date
 
@@ -207,7 +203,6 @@ def delete_year_upload(upload_id: int, db: Session = Depends(get_db)):
 @router.post("/data/upload-file", response_model=IPOHeatmapDataUploadRead)
 async def upload_data_file(
     file: UploadFile = File(...),
-    upload_date: date = Form(...),
     data_date: date = Form(...),
     db: Session = Depends(get_db)
 ):
@@ -248,7 +243,6 @@ async def upload_data_file(
         raise HTTPException(status_code=500, detail=str(e))
 
     upload_obj = IPOHeatmapDataUpload(
-        upload_date=upload_date,
         data_date=data_date,
         data_type="Data CSV/Excel",
         file_name=file.filename,
@@ -283,7 +277,7 @@ def get_data_by_year(year: int = Query(..., description="Year filter"), db: Sess
 
 @router.get("/data/uploads", response_model=List[IPOHeatmapDataUploadRead])
 def get_data_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(IPOHeatmapDataUpload).order_by(IPOHeatmapDataUpload.upload_date.desc()).all()
+    uploads = db.query(IPOHeatmapDataUpload).order_by(IPOHeatmapDataUpload.data_date.desc()).all()
     result = []
     for u in uploads:
         result.append({
@@ -312,7 +306,6 @@ def download_data_file(upload_id: int, db: Session = Depends(get_db)):
 async def update_data_upload(
     upload_id: int,
     file: UploadFile | None = File(None),
-    upload_date: date | None = Form(None),
     data_date: date | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -320,8 +313,7 @@ async def update_data_upload(
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    if upload_date:
-        upload.upload_date = upload_date
+   
     if data_date:
         upload.data_date = data_date
 

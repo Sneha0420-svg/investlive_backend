@@ -6,7 +6,6 @@ class DataUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
 
     isin = Column(String, index=True, nullable=True)
     co_name = Column(String, nullable=True)
@@ -61,7 +60,6 @@ class IPOUpload(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     upload_date = Column(Date, nullable=False)
-    data_date = Column(Date, nullable=False)
     data_type = Column(String(100), nullable=False)
 
     file_name = Column(String(255), nullable=False)

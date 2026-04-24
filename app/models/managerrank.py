@@ -70,7 +70,6 @@ class LMRankUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True, nullable=False)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     category = Column(String(100), nullable=False)
     file_name = Column(String(255), nullable=False)
@@ -85,7 +84,6 @@ class LMSubUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(36), index=True, nullable=False)
-    upload_date = Column(Date, nullable=False)
     data_date = Column(Date, nullable=False)
     category = Column(String(100), nullable=False)
     file_name = Column(String(255), nullable=False)

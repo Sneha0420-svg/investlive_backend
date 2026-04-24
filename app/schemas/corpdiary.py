@@ -5,7 +5,6 @@ from datetime import date
 class UploadBase(BaseModel):
     id: int
     group_id: str
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str
@@ -16,7 +15,6 @@ class UploadBase(BaseModel):
 
 # Schema for creating a new upload (optional if needed)
 class UploadCreate(BaseModel):
-    upload_date: date
     data_date: date
     data_type: str
     file_name: str
