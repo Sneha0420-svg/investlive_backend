@@ -56,6 +56,7 @@ from app.models.marketpulse import (
     StockPulseTable, StockPulseTableUpload, StockPulseIndex,StockPulseIndexUpload
 )
 from app.models.ads import Ad
+from app.models.ipoevents import IPOEvents, IPOEventsUpload
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models

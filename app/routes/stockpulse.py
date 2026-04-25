@@ -38,7 +38,6 @@ def read_stockpulse_file(file_obj) -> pd.DataFrame:
 
 
 # -------------------- UPLOAD --------------------
-from sqlalchemy.exc import SQLAlchemyError
 
 from sqlalchemy.exc import SQLAlchemyError
 
