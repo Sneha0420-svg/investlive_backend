@@ -1,19 +1,20 @@
-# /routes/ipoevents.py
+# /routes/ipotrack.py
+
 import io
 from datetime import date
 from uuid import uuid4
 
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
-
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import pandas as pd
 
 from app.database import SessionLocal
-from app.models.ipoevents import IPOEvents, IPOEventsUpload
+from app.models.ipotrack import IpoTrack,IpoTrackUpload
 from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
 
-router = APIRouter(prefix="/ipoevents", tags=["IPO Events"])
+router = APIRouter(prefix="/ipotrack", tags=["IPO Track"])
+
 
 # -------------------- DB DEP --------------------
 def get_db():
@@ -40,13 +41,22 @@ def parse_date(val):
         return None
 
 
+def to_decimal(val):
+    if pd.isna(val) or val == "":
+        return None
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+
 def generate_s3_key(filename: str):
-    return f"ipoevents/{uuid4()}_{filename}"
+    return f"ipotrack/{uuid4()}_{filename}"
 
 
 # -------------------- UPLOAD --------------------
 @router.post("/upload")
-async def upload_ipoevents(
+async def upload_ipotrack(
     mkt_date: date = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -69,9 +79,13 @@ async def upload_ipoevents(
             raise HTTPException(400, "Invalid file format (only Excel/CSV supported)")
 
     headers = [
-        "SCRIP", "ISS_OPEN", "SHEDULE_CLOSE", "LATE_CLOSE", "ALLOTMENT", "REFUND",
-        "DEMAT", "TRADING", "DP_DATE", "FP_DATE",
-        "DRHP_DATE", "RHP_DATE", "PROS_DATE", "ID"
+        "ID","INDIC","COCODE","CO_NAME","ISS_OPEN","ISS_CLOSE",
+        "HIGH","LOW","IPO_PR","FV","ISS_AMT","ISS_QTY",
+        "LISTED_PR","LISTED_GAIN","LISTED_DT","CMP","CUR_GAIN",
+        "MIN_LOT","EXCH","ISS_TYPE",
+        "LM1","LM2","LM3","LM4","LM5","LM6","LM7","LM8","LM9","LM10",
+        "LM11","LM12","LM13","LM14","LM15",
+        "MKTMKR1","MKTMKR2","MKTMKR3"
     ]
 
     if df.shape[1] != len(headers):
@@ -79,40 +93,72 @@ async def upload_ipoevents(
 
     df.columns = headers
 
-    # Optional: delete old data (⚠️ careful in production)
-    db.query(IPOEvents).delete()
+    # ⚠️ deletes all existing records (same as your pattern)
+    db.query(IpoTrack).delete()
     db.commit()
 
-    # Insert records
     records = []
     skipped_rows = 0
 
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         try:
-            if not row["SCRIP"]:
+            if not row["CO_NAME"]:
                 skipped_rows += 1
                 continue
 
-            record = IPOEvents(
-                SCRIP=safe_strip(row["SCRIP"]),
+            record = IpoTrack(
+                ID=int(row["ID"]) if not pd.isna(row["ID"]) else None,
+                INDIC=safe_strip(row["INDIC"]),
+                COCODE=safe_strip(row["COCODE"]),
+                CO_NAME=safe_strip(row["CO_NAME"]),
+
                 ISS_OPEN=parse_date(row["ISS_OPEN"]),
-                SHEDULE_CLOSE=parse_date(row["SHEDULE_CLOSE"]),
-                LATE_CLOSE=parse_date(row["LATE_CLOSE"]),
-                ALLOTMENT=parse_date(row["ALLOTMENT"]),
-                REFUND=parse_date(row["REFUND"]),
-                DEMAT=parse_date(row["DEMAT"]),
-                TRADING=parse_date(row["TRADING"]),
-                DP_DATE=parse_date(row["DP_DATE"]),
-                FP_DATE=parse_date(row["FP_DATE"]),
-                DRHP_DATE=parse_date(row["DRHP_DATE"]),
-                RHP_DATE=parse_date(row["RHP_DATE"]),
-                PROS_DATE=parse_date(row["PROS_DATE"]),
-                ID=int(row["ID"]) 
+                ISS_CLOSE=parse_date(row["ISS_CLOSE"]),
+
+                HIGH=to_decimal(row["HIGH"]),
+                LOW=to_decimal(row["LOW"]),
+                IPO_PR=to_decimal(row["IPO_PR"]),
+                FV=to_decimal(row["FV"]),
+
+                ISS_AMT=to_decimal(row["ISS_AMT"]),
+                ISS_QTY=to_decimal(row["ISS_QTY"]),
+
+                LISTED_PR=to_decimal(row["LISTED_PR"]),
+                LISTED_GAIN=to_decimal(row["LISTED_GAIN"]),
+                LISTED_DT=parse_date(row["LISTED_DT"]),
+
+                CMP=to_decimal(row["CMP"]),
+                CUR_GAIN=to_decimal(row["CUR_GAIN"]),
+
+                MIN_LOT=int(row["MIN_LOT"]) if not pd.isna(row["MIN_LOT"]) else None,
+
+                EXCH=safe_strip(row["EXCH"]),
+                ISS_TYPE=safe_strip(row["ISS_TYPE"]),
+
+                LM1=safe_strip(row["LM1"]),
+                LM2=safe_strip(row["LM2"]),
+                LM3=safe_strip(row["LM3"]),
+                LM4=safe_strip(row["LM4"]),
+                LM5=safe_strip(row["LM5"]),
+                LM6=safe_strip(row["LM6"]),
+                LM7=safe_strip(row["LM7"]),
+                LM8=safe_strip(row["LM8"]),
+                LM9=safe_strip(row["LM9"]),
+                LM10=safe_strip(row["LM10"]),
+                LM11=safe_strip(row["LM11"]),
+                LM12=safe_strip(row["LM12"]),
+                LM13=safe_strip(row["LM13"]),
+                LM14=safe_strip(row["LM14"]),
+                LM15=safe_strip(row["LM15"]),
+
+                MKTMKR1=safe_strip(row["MKTMKR1"]),
+                MKTMKR2=safe_strip(row["MKTMKR2"]),
+                MKTMKR3=safe_strip(row["MKTMKR3"]),
             )
 
             records.append(record)
 
-        except Exception as e:
+        except Exception:
             skipped_rows += 1
             continue
 
@@ -121,16 +167,13 @@ async def upload_ipoevents(
         db.commit()
 
     # Save upload metadata
-    try:
-        upload_row = IPOEventsUpload(
-            mkt_date=mkt_date,
-            file_name=file.filename,
-            file_path=s3_key
-        )
-        db.add(upload_row)
-        db.commit()
-    except Exception as e:
-        raise HTTPException(500, f"Upload metadata save failed: {str(e)}")
+    upload_row = IpoTrackUpload(
+        mkt_date=mkt_date,
+        file_name=file.filename,
+        file_path=s3_key
+    )
+    db.add(upload_row)
+    db.commit()
 
     return {
         "message": "Uploaded successfully",
@@ -141,23 +184,24 @@ async def upload_ipoevents(
 
 # -------------------- LIST --------------------
 @router.get("/uploads")
-def get_ipoevents_uploads(db: Session = Depends(get_db)):
-    uploads = db.query(IPOEventsUpload).order_by(IPOEventsUpload.mkt_date.desc()).all()
+def get_uploads(db: Session = Depends(get_db)):
+    uploads = db.query(IpoTrackUpload).order_by(IpoTrackUpload.mkt_date.desc()).all()
 
     return [
         {
             "id": u.id,
             "mkt_date": u.mkt_date,
             "file_name": u.file_name,
-            "download_url": f"/stocktrack/download/{u.id}"
+            "download_url": f"/ipotrack/download/{u.id}"
         }
         for u in uploads
     ]
 
+
 # -------------------- DOWNLOAD --------------------
 @router.get("/download/{upload_id}")
-def download_ipoevents_file(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(IPOEventsUpload).filter(IPOEventsUpload.id == upload_id).first()
+def download_file(upload_id: int, db: Session = Depends(get_db)):
+    upload = db.query(IpoTrackUpload).filter(IpoTrackUpload.id == upload_id).first()
 
     if not upload:
         raise HTTPException(404, "Upload not found")
@@ -167,7 +211,6 @@ def download_ipoevents_file(upload_id: int, db: Session = Depends(get_db)):
     if not file_stream:
         raise HTTPException(404, "File not found in S3")
 
-    # ✅ FIX: proper filename + type
     filename = upload.file_name.lower()
 
     if filename.endswith(".csv"):
@@ -187,49 +230,29 @@ def download_ipoevents_file(upload_id: int, db: Session = Depends(get_db)):
         }
     )
 
+
 # -------------------- DELETE --------------------
 @router.delete("/upload/{upload_id}")
-def delete_ipoevents_upload(upload_id: int, db: Session = Depends(get_db)):
-    upload = db.query(IPOEventsUpload).filter(IPOEventsUpload.id == upload_id).first()
+def delete_upload(upload_id: int, db: Session = Depends(get_db)):
+    upload = db.query(IpoTrackUpload).filter(IpoTrackUpload.id == upload_id).first()
 
     if not upload:
         raise HTTPException(404, "Upload not found")
 
-    # ✅ delete stock data using mkt_date
-    db.query(IPOEvents).delete(synchronize_session=False)
+    db.query(IpoTrack).delete()
 
-    # ✅ delete file from S3
     if upload.file_path:
         delete_file_from_s3(upload.file_path)
 
-    # ✅ delete upload record
     db.delete(upload)
     db.commit()
 
     return {"message": "Deleted successfully"}
 
-# -------------------- GET ALL STOCKS --------------------
-@router.get("/events")
-def get_all_events(db: Session = Depends(get_db)):
-    events = db.query(IPOEvents).order_by(IPOEvents.ID).all()
-    return [
-    {
-        "SCRIP": e.SCRIP,
-        "ISS_OPEN": e.ISS_OPEN,
-        "SHEDULE_CLOSE": e.SHEDULE_CLOSE,
-        "LATE_CLOSE": e.LATE_CLOSE,
-        "ALLOTMENT": e.ALLOTMENT,
-        "REFUND": e.REFUND,
-        "DEMAT": e.DEMAT,
-        "TRADING": e.TRADING,
-        "DP_DATE": e.DP_DATE,
-        "FP_DATE": e.FP_DATE,
-        "DRHP_DATE": e.DRHP_DATE,
-        "RHP_DATE": e.RHP_DATE,
-        "PROS_DATE": e.PROS_DATE,
-        "ID": e.ID
-    }
-    for e in events
-]
 
+# -------------------- GET ALL --------------------
+@router.get("/all")
+def get_all_ipotrack(db: Session = Depends(get_db)):
+    data = db.query(IpoTrack).all()
 
+    return [row.__dict__ for row in data]

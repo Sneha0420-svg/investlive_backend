@@ -19,6 +19,7 @@ from app.routes.mostvalued import router as mostvaluedhouse_router
 from app.routes.volumetrade import router as volumetrade_router 
 from app.routes.ipo import router as ipo_router
 from app.routes.ipoevents import router as ipo_events_router
+from app.routes.ipotrack import router as ipo_track_router
 from app.routes.snapshot import router as snapshot_router
 from app.routes.curtainraiser import router as curtaonraiser_router
 from app.routes.primarymusings import router as primarymusings_router
@@ -95,14 +96,14 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/api/openapi.json",  # ✅ important (match nginx path)
+        openapi_url="/api/openapi.json", 
         title="Investlive API Docs"
     )
 
 @app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/api/openapi.json",  # ✅ important (match nginx path)
+        openapi_url="/api/openapi.json",
         
         title="Investlive ReDoc"
     )
@@ -138,6 +139,7 @@ app.include_router(heatmap_router)
 app.include_router(stocks_movement_router)
 app.include_router(ipo_router)
 app.include_router(ipo_events_router)
+app.include_router(ipo_track_router)
 app.include_router(snapshot_router)
 app.include_router(curtaonraiser_router)
 app.include_router(primarymusings_router)
