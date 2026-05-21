@@ -103,45 +103,63 @@ async def upload_stock_csv(
         folder="stocks_movements"
     )
 
-    # Save upload history (KEEP SAFE)
+    # Save upload history
     upload = Stock_MovementsUploadHistory(
         file_name=file.filename,
         file_path=s3_key,
         mkt_date=mkt_date
     )
+
     db.add(upload)
-    db.flush()  # safer than commit here
-
-    # ==============================
-    # 💣 FULL RESET STOCK TABLE
-    # ==============================
-    db.query(Stocks_Movements).delete(synchronize_session=False)
-
-    # (FASTER OPTION)
-    # db.execute(text("TRUNCATE TABLE stocks_movements RESTART IDENTITY CASCADE"))
+    db.flush()
 
     # CSV column indices
     company_col = 2
     isin_col = 29
     ch_col = 5
 
-    records = []
+    inserted = 0
+    updated = 0
 
     for _, row in df.iterrows():
+
         company = str(row[company_col]).strip()
         isin = str(row[isin_col]).strip()
 
-        try:
-            ch_val = float(row[ch_col])
-            ch = None if math.isnan(ch_val) or math.isinf(ch_val) else round(ch_val, 2)
-        except:
-            ch = None
-
-        if not company or not isin or ch is None:
+        if not company or not isin:
             continue
 
-        records.append(
-            Stocks_Movements(
+        try:
+            ch_val = float(row[ch_col])
+
+            if math.isnan(ch_val) or math.isinf(ch_val):
+                continue
+
+            ch = round(ch_val, 2)
+
+        except:
+            continue
+
+        # Check existing stock
+        stock = db.query(Stocks_Movements).filter(
+            Stocks_Movements.isin == isin
+        ).first()
+
+        if stock:
+            # Shift previous days
+            stock.Day_5 = stock.Day_4
+            stock.Day_4 = stock.Day_3
+            stock.Day_3 = stock.Day_2
+            stock.Day_2 = stock.Day_1
+            stock.Day_1 = ch
+
+            stock.company = company
+
+            updated += 1
+
+        else:
+            # New stock entry
+            new_stock = Stocks_Movements(
                 company=company,
                 isin=isin,
                 Day_1=ch,
@@ -150,16 +168,18 @@ async def upload_stock_csv(
                 Day_4=None,
                 Day_5=None
             )
-        )
 
-    db.bulk_save_objects(records)
+            db.add(new_stock)
+            inserted += 1
+
     db.commit()
 
     return {
-        "message": "Stock movements fully refreshed successfully",
+        "message": "Stock movements updated successfully",
         "upload_id": upload.id,
         "file_url": get_s3_file_url(s3_key),
-        "records_inserted": len(records)
+        "inserted": inserted,
+        "updated": updated
     }
 # ------------------------
 # Get all uploads
