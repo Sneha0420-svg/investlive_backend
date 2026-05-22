@@ -60,15 +60,20 @@ class CircuitUpLow(Base):
 
     COMPANY = Column(String(25), nullable=True)
     ISIN = Column(String(25), primary_key=True, index=True)
+
     CMP = Column(Numeric(20, 2), nullable=False)
     CH_PER = Column(Numeric(20, 1), nullable=False)
-    VOL = Column(Integer, nullable=False)
-    VALUE = Column(Integer, nullable=False)
-    TRADE = Column(Integer, nullable=False)
+
+    VOL = Column(BigInteger, nullable=False)
+    VALUE = Column(BigInteger, nullable=False)
+    TRADE = Column(BigInteger, nullable=False)
+
     WKH_52 = Column("52WKH", Numeric(20, 2), nullable=False)
     WKH_DT_52 = Column("52WKHDT", String(11), nullable=False)
+
     WKL_52 = Column("52WKL", Numeric(20, 2), nullable=False)
     WKL_DT_52 = Column("52WKLDT", String(11), nullable=False)
+
     group_id = Column(String(36), nullable=False, index=True)
 
 class CircuitUpLowUpload(Base):
