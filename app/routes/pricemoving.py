@@ -247,3 +247,37 @@ def get_all_uploads(db: Session = Depends(get_db)):
         }
         for u in uploads
     ]
+# ----------------------
+# Delete all PriceMoving records for a specific COCODE
+# ----------------------
+@router.delete("/delete-by-cocode")
+def delete_by_cocode(
+    cocode: str = Query(..., description="COCODE to delete"),
+    db: Session = Depends(get_db)
+):
+    # Check if records exist
+    existing = (
+        db.query(PriceMoving)
+        .filter(PriceMoving.COCODE == cocode)
+        .all()
+    )
+
+    if not existing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No records found for COCODE {cocode}"
+        )
+
+    # Delete matching rows
+    deleted_count = (
+        db.query(PriceMoving)
+        .filter(PriceMoving.COCODE == cocode)
+        .delete(synchronize_session=False)
+    )
+
+    db.commit()
+
+    return {
+        "message": f"Deleted {deleted_count} records for COCODE {cocode}",
+        "rows_deleted": deleted_count
+    }
