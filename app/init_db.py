@@ -51,6 +51,12 @@ from app.models.marketpulse import (
     StockPulseTable, StockPulseTableUpload, StockPulseIndex,StockPulseIndexUpload
 )
 from app.models.ads import Ad
+from app.models.ipoevents import IPOEvents, IPOEventsUpload,CalendarEvents
+from app.models.ipotrack import IpoTrack,IpoTrackUpload
+from app.models.count import InstockTrendCount
+from app.models.google_events import GoogleEvent
+from app.models.action import CorporateActionData, CorporateActionUpload,ResultData, ResultUpload
+from app.models.email import OneTimeLink   
 
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models

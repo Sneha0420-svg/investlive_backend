@@ -4,12 +4,16 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.staticfiles import StaticFiles
 import secrets
-import os
+from dotenv import load_dotenv
 
+import os
+from starlette.middleware.sessions import SessionMiddleware
 # =========================
 # IMPORT ROUTERS
 # =========================
 from app.routes.auth import router as auth_router
+from app.routes.mail import router as mail_router
+from app.routes.google_calendar import router as google_calendar_router
 from app.routes.ads import router as ads_router
 from app.routes.marketdate import router as marketdate_router
 from app.routes.marketind import router as marketind_router
@@ -38,7 +42,17 @@ from app.routes.managerrank import router as managerrank_router
 from app.routes.mostvaluedcharts import router as mostvaluedcharts_router
 from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
+from apscheduler.schedulers.background import BackgroundScheduler
+from app.cron.sync_calendar import sync_ipo_calendar
+from app.routes.actions import router as corporate_action_router
+from app.routes.ipoevents import router as ipo_events_router
+from app.routes.ipotrack import router as ipo_track_router
+# Initialize the background scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(sync_ipo_calendar, 'interval', minutes=30)  # Run every 30 minutes
+scheduler.start()
 
+load_dotenv()
 # =========================
 # APP INIT (DISABLE DEFAULT DOCS)
 # =========================
@@ -62,11 +76,17 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # =========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # change in production
+    allow_origins=["http://localhost:3000"],   # change in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="9f8s9df8s9df8s9df8s9df8s9df"
+)
+
 
 # =========================
 # BASIC AUTH FOR DOCS
@@ -94,18 +114,17 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url="/openapi.json", 
         title="Investlive API Docs"
     )
-
 
 @app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url=app.openapi_url,
+        openapi_url="/openapi.json",
+        
         title="Investlive ReDoc"
     )
-
 # =========================
 # ROOT
 # =========================
@@ -117,6 +136,8 @@ def read_root():
 # ROUTERS
 # =========================
 app.include_router(auth_router)
+app.include_router(mail_router)
+app.include_router(google_calendar_router)
 app.include_router(ads_router)
 app.include_router(marketdate_router)
 app.include_router(news_router)
@@ -136,6 +157,9 @@ app.include_router(volumetrade_router)
 app.include_router(heatmap_router)
 app.include_router(stocks_movement_router)
 app.include_router(ipo_router)
+app.include_router(ipo_events_router)
+app.include_router(ipo_track_router)
+app.include_router(corporate_action_router)
 app.include_router(snapshot_router)
 app.include_router(curtaonraiser_router)
 app.include_router(primarymusings_router)
