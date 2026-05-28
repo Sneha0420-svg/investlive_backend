@@ -1,49 +1,137 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from dotenv import load_dotenv
 import requests
 import os
+import time
+from datetime import datetime
 
 load_dotenv()
 
-router = APIRouter(prefix="/live-news", tags=["Live News"])
+router = APIRouter(
+    prefix="/live-news",
+    tags=["Live News"]
+)
 
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
 
 @router.get("/market-news")
 def get_market_news():
 
-    url = "https://newsapi.org/v2/top-headlines"
+    try:
 
-    params = {
-        "category": "business",
-        "country": "in",
-        "apiKey": NEWS_API_KEY,
-    }
+        if not FINNHUB_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="FINNHUB_API_KEY missing"
+            )
 
-    response = requests.get(url, params=params)
+        final_news = []
 
-    print("STATUS CODE:", response.status_code)
+        news_configs = [
+            {
+                "category": "general",
+                "label": "business"
+            },
+            {
+                "category": "forex",
+                "label": "forex"
+            },
+            {
+                "category": "crypto",
+                "label": "crypto"
+            },
+            {
+                "category": "merger",
+                "label": "merger"
+            }
+        ]
 
-    data = response.json()
+        news_id = 1
 
-    print("FULL RESPONSE:", data)
+        for item in news_configs:
 
-    articles = data.get("articles", [])
+            url = "https://finnhub.io/api/v1/news"
 
-    cleaned_news = []
+            params = {
+                "category": item["category"],
+                "token": FINNHUB_API_KEY
+            }
 
-    for index, article in enumerate(articles):
+            response = requests.get(
+                url,
+                params=params,
+                timeout=20
+            )
 
-        cleaned_news.append({
-            "id": index + 1,
-            "title": article.get("title"),
-            "description": article.get("description"),
-            "content": article.get("content"),
-            "image": article.get("urlToImage"),
-            "url": article.get("url"),
-            "source": article.get("source", {}).get("name"),
-            "publishedAt": article.get("publishedAt"),
-        })
+            print(f"{item['category']} STATUS:", response.status_code)
 
-    return cleaned_news
+            if response.status_code != 200:
+                continue
+
+            articles = response.json()
+
+            for article in articles[:10]:
+
+                # REMOVE EMPTY TITLES
+                if not article.get("headline"):
+                    continue
+
+                # CLEAN CONTENT
+                summary = article.get("summary") or ""
+
+                # REMOVE HTML TAGS IF ANY
+                summary = summary.replace("<p>", "")
+                summary = summary.replace("</p>", "")
+                summary = summary.replace("\n", " ")
+
+                final_news.append({
+                    "id": news_id,
+                    "title": article.get("headline"),
+                    "description": summary[:300],
+                    "content": summary,
+                    "image": article.get("image"),
+                    "url": article.get("url"),
+                    "source": article.get("source"),
+                    "category": item["label"],
+                    "publishedAt": datetime.fromtimestamp(
+                        article.get("datetime", time.time())
+                    ).strftime("%Y-%m-%d %H:%M:%S"),
+                    "related": article.get("related")
+                })
+
+                news_id += 1
+
+        # REMOVE DUPLICATES
+        unique_news = []
+        seen_titles = set()
+
+        for news in final_news:
+
+            title = news["title"]
+
+            if title not in seen_titles:
+                unique_news.append(news)
+                seen_titles.add(title)
+
+        # SORT LATEST FIRST
+        unique_news.sort(
+            key=lambda x: x["publishedAt"],
+            reverse=True
+        )
+
+        return {
+            "status": "success",
+            "total": len(unique_news),
+            "data": unique_news
+        }
+
+    except Exception as e:
+
+        import traceback
+        print(traceback.format_exc())
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
