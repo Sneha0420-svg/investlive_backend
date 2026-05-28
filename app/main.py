@@ -40,6 +40,7 @@ from app.routes.managerrank import router as managerrank_router
 from app.routes.mostvaluedcharts import router as mostvaluedcharts_router
 from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
+from app.routes.actions import router as corporate_action_router
 
 # =========================
 # APP INIT (DISABLE DEFAULT DOCS)
@@ -147,5 +148,6 @@ app.include_router(reit_router)
 app.include_router(ipo_heatmap_router)
 app.include_router(managerrank_router)
 app.include_router(corpdiary_router)
+app.include_router(corporate_action_router)
 app.include_router(pricemoving_router)
 app.include_router(volumemoving_router)
