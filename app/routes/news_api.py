@@ -1,9 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 import requests
 import os
-import time
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from app.database import SessionLocal
+from app.models.news import MarketNews
 
 load_dotenv()
 
@@ -12,126 +15,436 @@ router = APIRouter(
     tags=["Live News"]
 )
 
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+API_KEY = os.getenv("MARKETAUX_API_KEY")
 
 
-@router.get("/market-news")
-def get_market_news():
+# ---------------- DB ---------------- #
 
+def get_db():
+    db = SessionLocal()
     try:
+        yield db
+    finally:
+        db.close()
 
-        if not FINNHUB_API_KEY:
-            raise HTTPException(
-                status_code=500,
-                detail="FINNHUB_API_KEY missing"
-            )
 
-        final_news = []
+# ---------------- CONFIG ---------------- #
 
-        news_configs = [
-            {
-                "category": "general",
-                "label": "business"
-            },
-            {
-                "category": "forex",
-                "label": "forex"
-            },
-            {
-                "category": "crypto",
-                "label": "crypto"
-            },
-            {
-                "category": "merger",
-                "label": "merger"
-            }
-        ]
+NEWS_CONFIGS = [
+    {
+        "label": "market",
+        "query": "stock market OR share market"
+    },
+    {
+        "label": "company",
+        "query": "company earnings OR stocks OR shares"
+    },
+    {
+        "label": "crypto",
+        "query": "cryptocurrency OR bitcoin OR ethereum"
+    },
+    {
+        "label": "forex",
+        "query": "forex OR usd OR currency market"
+    },
+]
 
-        news_id = 1
 
-        for item in news_configs:
+# ---------------- SYNC CONTROL ---------------- #
 
-            url = "https://finnhub.io/api/v1/news"
+LAST_SYNC_TIMES = {
+    "market": None,
+    "company": None,
+    "crypto": None,
+    "forex": None,
+}
 
-            params = {
-                "category": item["category"],
-                "token": FINNHUB_API_KEY
-            }
+SYNC_INTERVAL = timedelta(hours=24)
 
-            response = requests.get(
-                url,
-                params=params,
-                timeout=20
-            )
 
-            print(f"{item['category']} STATUS:", response.status_code)
+def should_sync(news_type: str):
 
-            if response.status_code != 200:
-                continue
+    last_sync = LAST_SYNC_TIMES.get(news_type)
 
-            articles = response.json()
+    if last_sync is None:
+        return True
 
-            for article in articles[:10]:
+    return datetime.utcnow() - last_sync > SYNC_INTERVAL
 
-                # REMOVE EMPTY TITLES
-                if not article.get("headline"):
-                    continue
 
-                # CLEAN CONTENT
-                summary = article.get("summary") or ""
+def update_sync_time(news_type: str):
 
-                # REMOVE HTML TAGS IF ANY
-                summary = summary.replace("<p>", "")
-                summary = summary.replace("</p>", "")
-                summary = summary.replace("\n", " ")
+    LAST_SYNC_TIMES[news_type] = datetime.utcnow()
 
-                final_news.append({
-                    "id": news_id,
-                    "title": article.get("headline"),
-                    "description": summary[:300],
-                    "content": summary,
-                    "image": article.get("image"),
-                    "url": article.get("url"),
-                    "source": article.get("source"),
-                    "category": item["label"],
-                    "publishedAt": datetime.fromtimestamp(
-                        article.get("datetime", time.time())
-                    ).strftime("%Y-%m-%d %H:%M:%S"),
-                    "related": article.get("related")
-                })
 
-                news_id += 1
+# ---------------- COMMON SYNC FUNCTION ---------------- #
 
-        # REMOVE DUPLICATES
-        unique_news = []
-        seen_titles = set()
+def sync_news_by_type(
+    news_type: str,
+    db: Session
+):
 
-        for news in final_news:
+    config = next(
+        (
+            item for item in NEWS_CONFIGS
+            if item["label"] == news_type
+        ),
+        None
+    )
 
-            title = news["title"]
-
-            if title not in seen_titles:
-                unique_news.append(news)
-                seen_titles.add(title)
-
-        # SORT LATEST FIRST
-        unique_news.sort(
-            key=lambda x: x["publishedAt"],
-            reverse=True
+    if not config:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid news type"
         )
 
-        return {
-            "status": "success",
-            "total": len(unique_news),
-            "data": unique_news
-        }
+    # DELETE OLD CATEGORY NEWS
+    (
+        db.query(MarketNews)
+        .filter(MarketNews.category == news_type)
+        .delete()
+    )
 
-    except Exception as e:
+    db.commit()
 
-        import traceback
-        print(traceback.format_exc())
+    url = "https://newsdata.io/api/1/latest"
+
+    params = {
+        "apikey": API_KEY,
+        "q": config["query"],
+        "language": "en",
+        "country": "in,us",
+        "category": "business"
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=30
+    )
+
+    data = response.json()
+
+    print(data)
+
+    if response.status_code != 200:
 
         raise HTTPException(
-            status_code=500,
-            detail=str(e)
+            status_code=response.status_code,
+            detail=data
         )
+
+    articles = data.get("results", [])
+
+    inserted = 0
+
+    for article in articles:
+
+        try:
+
+            title = article.get("title")
+
+            if not title:
+                continue
+
+            description = article.get("description") or ""
+
+            content = article.get("content") or ""
+
+            if (
+                content == "ONLY AVAILABLE IN PAID PLANS"
+                or not content
+            ):
+                content = description
+
+            image = article.get("image_url") or ""
+
+            news_url = article.get("link") or ""
+
+            source = (
+                article.get("source_name") or ""
+            )[:255]
+
+            keywords = article.get("keywords", [])
+
+            related = (
+                ", ".join(keywords)
+                if keywords else ""
+            )
+
+            published_at = None
+
+            try:
+
+                pub_date = article.get("pubDate")
+
+                if pub_date:
+
+                    published_at = datetime.strptime(
+                        pub_date,
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+
+            except Exception:
+                pass
+
+            news = MarketNews(
+                title=title,
+                description=description,
+                content=content,
+                image=image,
+                url=news_url,
+                source=source,
+                category=news_type,
+                published_at=published_at,
+                related=related
+            )
+
+            db.add(news)
+
+            inserted += 1
+
+        except Exception as article_error:
+
+            print(
+                "ARTICLE ERROR:",
+                str(article_error)
+            )
+
+            continue
+
+    db.commit()
+
+    # UPDATE LAST SYNC TIME
+    update_sync_time(news_type)
+
+    return {
+        "status": "success",
+        "category": news_type,
+        "inserted": inserted
+    }
+
+
+# ---------------- MANUAL SYNC ROUTES ---------------- #
+
+@router.get("/sync-market-news")
+def sync_market_news(
+    db: Session = Depends(get_db)
+):
+    return sync_news_by_type(
+        "market",
+        db
+    )
+
+
+@router.get("/sync-company-news")
+def sync_company_news(
+    db: Session = Depends(get_db)
+):
+    return sync_news_by_type(
+        "company",
+        db
+    )
+
+
+@router.get("/sync-crypto-news")
+def sync_crypto_news(
+    db: Session = Depends(get_db)
+):
+    return sync_news_by_type(
+        "crypto",
+        db
+    )
+
+
+@router.get("/sync-forex-news")
+def sync_forex_news(
+    db: Session = Depends(get_db)
+):
+    return sync_news_by_type(
+        "forex",
+        db
+    )
+
+
+# ---------------- GET ROUTES ---------------- #
+
+@router.get("/market-news")
+def get_market_news(
+    db: Session = Depends(get_db)
+):
+
+    if should_sync("market"):
+        sync_news_by_type("market", db)
+
+    data = (
+        db.query(MarketNews)
+        .filter(MarketNews.category == "market")
+        .order_by(MarketNews.id.desc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "total": len(data),
+        "data": data
+    }
+
+
+@router.get("/company-news")
+def get_company_news(
+    db: Session = Depends(get_db)
+):
+
+    if should_sync("company"):
+        sync_news_by_type("company", db)
+
+    data = (
+        db.query(MarketNews)
+        .filter(MarketNews.category == "company")
+        .order_by(MarketNews.id.desc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "total": len(data),
+        "data": data
+    }
+
+
+@router.get("/crypto-news")
+def get_crypto_news(
+    db: Session = Depends(get_db)
+):
+
+    if should_sync("crypto"):
+        sync_news_by_type("crypto", db)
+
+    data = (
+        db.query(MarketNews)
+        .filter(MarketNews.category == "crypto")
+        .order_by(MarketNews.id.desc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "total": len(data),
+        "data": data
+    }
+
+
+@router.get("/forex-news")
+def get_forex_news(
+    db: Session = Depends(get_db)
+):
+
+    if should_sync("forex"):
+        sync_news_by_type("forex", db)
+
+    data = (
+        db.query(MarketNews)
+        .filter(MarketNews.category == "forex")
+        .order_by(MarketNews.id.desc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "total": len(data),
+        "data": data
+    }
+
+
+# ---------------- GET NEWS BY ID ---------------- #
+
+@router.get("/news/{news_id}")
+def get_news_by_id(
+    news_id: int,
+    db: Session = Depends(get_db)
+):
+
+    news = (
+        db.query(MarketNews)
+        .filter(MarketNews.id == news_id)
+        .first()
+    )
+
+    if not news:
+
+        raise HTTPException(
+            status_code=404,
+            detail="News not found"
+        )
+
+    return {
+        "status": "success",
+        "data": news
+    }
+
+
+# ---------------- ALL OTHER NEWS ---------------- #
+
+@router.get("/all-other-news")
+def get_all_other_news(
+    db: Session = Depends(get_db)
+):
+
+    for category in ["company", "crypto", "forex"]:
+
+        if should_sync(category):
+            sync_news_by_type(category, db)
+
+    data = (
+        db.query(MarketNews)
+        .filter(MarketNews.category != "market")
+        .order_by(MarketNews.id.desc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "total": len(data),
+        "data": data
+    }
+
+
+# ---------------- COMBINED NEWS ---------------- #
+
+@router.get("/combined-news")
+def get_combined_news(
+    db: Session = Depends(get_db)
+):
+
+    for category in ["company", "crypto", "forex"]:
+
+        if should_sync(category):
+            sync_news_by_type(category, db)
+
+    categories = ["company", "crypto", "forex"]
+
+    combined_data = []
+
+    for category in categories:
+
+        news_items = (
+            db.query(MarketNews)
+            .filter(MarketNews.category == category)
+            .order_by(MarketNews.id.desc())
+            .limit(3)
+            .all()
+        )
+
+        combined_data.extend(news_items)
+
+    combined_data.sort(
+        key=lambda x: x.id,
+        reverse=True
+    )
+
+    return {
+        "status": "success",
+        "total": len(combined_data),
+        "data": combined_data
+    }
