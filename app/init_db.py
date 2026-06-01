@@ -16,7 +16,7 @@ from app.models.curtainraiser import CurtainRaiser
 from app.models.primarymusings import PrimaryMusings
 from app.models.volumetrade import VolumeTradevolume,VolumeTradevalue,VolumeTradetrade,VolumeTradeUpload
 from app.models.ipoheatmap import IPOHeatmapYear,IPOHeatmapYearUpload,IPOHeatmapData,IPOHeatmapDataUpload
-from app.models.news import News
+from app.models.news import News,MarketNews,Company
 from app.models.announcement import Announcement
 from app.models.stockpulse import StockPulseData, StockPulseUpload
 from app.models.stocktrack import StockTrack,StockTrackUpload

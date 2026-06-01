@@ -41,6 +41,7 @@ from app.routes.mostvaluedcharts import router as mostvaluedcharts_router
 from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
 from app.routes.actions import router as corporate_action_router
+from app.routes.news_api import router as livenews_router
 
 # =========================
 # APP INIT (DISABLE DEFAULT DOCS)
@@ -48,10 +49,10 @@ from app.routes.actions import router as corporate_action_router
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-    docs_url=None,          # disable default docs
-    redoc_url=None,         # disable default redoc
-    openapi_url="/openapi.json",
-    root_path="/api"
+    # docs_url=None,          # disable default docs
+    # redoc_url=None,         # disable default redoc
+    # openapi_url="/openapi.json",
+    # root_path="/api"
 )
 
 # =========================
@@ -97,14 +98,14 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/api/openapi.json", 
+        openapi_url="/openapi.json", 
         title="Investlive API Docs"
     )
 
 @app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/api/openapi.json",
+        openapi_url="/openapi.json",
         
         title="Investlive ReDoc"
     )
@@ -123,6 +124,7 @@ app.include_router(auth_router)
 app.include_router(ads_router)
 app.include_router(marketdate_router)
 app.include_router(news_router)
+app.include_router(livenews_router)
 app.include_router(announcement_router)
 app.include_router(marketind_router)
 app.include_router(marketindgraph_router)

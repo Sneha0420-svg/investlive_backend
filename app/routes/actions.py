@@ -110,11 +110,19 @@ def split_purpose_and_value(text):
     if not text:
         return None, None
 
-    text = text.strip()
+    # Clean text
+    text = str(text)
+    text = re.sub(r'\s+', ' ', text).strip()
 
-    # STOCK SPLIT
+    # -----------------------------
+    # STOCK SPLIT / FACE VALUE SPLIT
+    # Examples:
+    # Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share
+    # Stock Split - From Rs 10/- To Rs 5/-
+    # From Re 1/- To Re 0.5/-
+    # -----------------------------
     split_match = re.search(
-        r'From\s+Rs\.?\s*(\d+)[/-]*\s+to\s+Rs\.?\s*(\d+)',
+        r'From\s+R(?:s|e)\.?\s*([\d.]+).*?To\s+R(?:s|e)\.?\s*([\d.]+)',
         text,
         re.IGNORECASE
     )
@@ -125,16 +133,38 @@ def split_purpose_and_value(text):
             f"{split_match.group(1)} to {split_match.group(2)}"
         )
 
+    # -----------------------------
     # BONUS ISSUE
-    bonus_match = re.search(r'(\d+\s*:\s*\d+)', text)
+    # Examples:
+    # Bonus Issue - 1:1
+    # Bonus - 2:5
+    # -----------------------------
+    bonus_match = re.search(
+        r'(\d+\s*:\s*\d+)',
+        text
+    )
 
     if bonus_match:
         value = bonus_match.group(1).replace(" ", "")
-        purpose = text.replace(bonus_match.group(1), "").strip(" -")
+
+        purpose = (
+            text
+            .replace(bonus_match.group(1), "")
+            .strip(" -")
+        )
+
         return purpose, value
 
-    # DIVIDEND / VALUE
-    div_match = re.search(r'(.+?)\s*-\s*(.+)', text)
+    # -----------------------------
+    # DIVIDEND / OTHER PURPOSES
+    # Examples:
+    # Interim Dividend - Rs 5 Per Share
+    # Final Dividend - Rs 10 Per Share
+    # -----------------------------
+    div_match = re.search(
+        r'(.+?)\s*-\s*(.+)',
+        text
+    )
 
     if div_match:
         return (
@@ -142,6 +172,9 @@ def split_purpose_and_value(text):
             div_match.group(2).strip()
         )
 
+    # -----------------------------
+    # DEFAULT
+    # -----------------------------
     return text, None
 
 def to_camel_case(text):

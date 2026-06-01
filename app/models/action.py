@@ -43,7 +43,6 @@ class ResultData(Base):
     __tablename__ = "corporate_action_results"
 
     id = Column(Integer, primary_key=True, index=True)
-
     scrip_code_symbol = Column(String, nullable=False)
     company = Column(String, nullable=False)
     Result_date = Column(Date)
