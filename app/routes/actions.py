@@ -191,7 +191,25 @@ def split_purpose_and_value(text):
             div_match.group(1).strip(),
             div_match.group(2).strip()
         )
+def normalize_purpose_value(value):
 
+    if not value:
+        return ""
+
+    value = str(value).strip().lower()
+
+    # Bonus ratio
+    ratio = re.search(r'(\d+\s*:\s*\d+)', value)
+    if ratio:
+        return ratio.group(1).replace(" ", "")
+
+    # First numeric value
+    number = re.search(r'(\d+(?:\.\d+)?)', value)
+
+    if number:
+        return str(float(number.group(1)))
+
+    return value
     # -----------------------------
     # DEFAULT
     # -----------------------------
@@ -453,18 +471,26 @@ async def add_corporate_action(
         # ==================================================
         # DUPLICATE CHECK
         # ==================================================
+        existing_rows = db.query(CorporateActionData).filter(
+                    func.lower(CorporateActionData.COMPANY) == company.lower(),
+                    CorporateActionData.EX_DATE == ex_date
+                ).all()
 
-        existing = db.query(CorporateActionData).filter(
-                func.lower(CorporateActionData.COMPANY) == company.lower(),
-                CorporateActionData.EX_DATE == ex_date,
-                CorporateActionData.PURPOSE_VALUE == (purpose_value.strip() if purpose_value else None)
-            ).first()
+        for row in existing_rows:
 
-        if existing:
-            raise HTTPException(
-        status_code=400,
-        detail="Corporate action already exists"
-    )
+            if (
+            normalize_purpose(row.PURPOSE) ==
+            normalize_purpose(purpose)
+            and
+            normalize_purpose_value(row.PURPOSE_VALUE) ==
+            normalize_purpose_value(purpose_value)
+        ):
+                
+                raise HTTPException(
+            status_code=400,
+            detail="Corporate action already exists"
+        )
+        
 
         # ==================================================
         # RESULT ENTRY
@@ -687,7 +713,7 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
         key = (
             normalize_company(d.COMPANY),
             normalize_purpose(d.PURPOSE),
-            (d.PURPOSE_VALUE or "").strip(),
+            normalize_purpose_value(d.PURPOSE_VALUE),
             d.EX_DATE
         )
 
