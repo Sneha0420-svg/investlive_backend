@@ -8,6 +8,7 @@ import io
 import re
 from app.database import SessionLocal
 from app.models.action import CorporateActionData, CorporateActionUpload, ResultData, ResultUpload,    ManualEntryUpload
+from sqlalchemy import func
 
 from app.s3_utils import (
     upload_file_to_s3,
@@ -30,6 +31,25 @@ def get_db():
         yield db
     finally:
         db.close()
+        
+        
+        
+def normalize_purpose(purpose):
+    purpose = (purpose or "").strip().lower()
+
+    if "bonus" in purpose:
+        return "bonus"
+
+    if "split" in purpose:
+        return "stock split"
+
+    if "dividend" in purpose:
+        return "dividend"
+
+    if "buy back" in purpose or "buyback" in purpose:
+        return "share buyback"
+
+    return purpose
 # -----------------------------
 # DATE PARSER
 # -----------------------------
@@ -569,37 +589,50 @@ def get_manual_uploads(
 @router.get("/actions")
 def get_corporate_data(db: Session = Depends(get_db)):
 
-    data = db.query(CorporateActionData)\
-        .order_by(CorporateActionData.ID.desc())\
+    data = (
+        db.query(CorporateActionData)
+        .order_by(CorporateActionData.ID.desc())
         .all()
+    )
 
-    return [
-        {
+    seen = set()
+    result = []
+
+    for d in data:
+
+        key = (
+            normalize_company(d.COMPANY),
+            normalize_purpose(d.PURPOSE),
+            (d.PURPOSE_VALUE or "").strip(),
+            d.EX_DATE
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        result.append({
             "id": d.ID,
             "scrip_code_symbol": d.SCRIP_CODE_SYMBOL,
             "security_name": d.SECURITY_NAME,
-            "company": to_camel_case( d.COMPANY ),
+            "company": to_camel_case(d.COMPANY),
             "series": d.SERIES,
-
             "ex_date": d.EX_DATE,
             "record_date": d.RECORD_DATE,
-
             "purpose": d.PURPOSE,
             "purpose_value": d.PURPOSE_VALUE,
-
             "face_value": d.FACE_VALUE,
-
             "bc_start_date": d.BC_START_DATE,
             "bc_end_date": d.BC_END_DATE,
-
             "nd_start_date": d.ND_START_DATE,
             "nd_end_date": d.ND_END_DATE,
-
             "actual_payment_date": d.ACTUAL_PAYMENT_DATE
-        }
-        for d in data
-    ]
-    
+        })
+
+    return result
+
+
 @router.get("/results")
 def get_result_data(db: Session = Depends(get_db)):
 
