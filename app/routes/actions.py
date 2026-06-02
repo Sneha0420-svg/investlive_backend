@@ -449,6 +449,22 @@ async def add_corporate_action(
                 status_code=400,
                 detail="Government companies not allowed"
             )
+            
+        # ==================================================
+        # DUPLICATE CHECK
+        # ==================================================
+
+        existing = db.query(CorporateActionData).filter(
+                func.lower(CorporateActionData.COMPANY) == company.lower(),
+                CorporateActionData.EX_DATE == ex_date,
+                CorporateActionData.PURPOSE_VALUE == (purpose_value.strip() if purpose_value else None)
+            ).first()
+
+        if existing:
+            raise HTTPException(
+        status_code=400,
+        detail="Corporate action already exists"
+    )
 
         # ==================================================
         # RESULT ENTRY
@@ -654,21 +670,43 @@ def get_result_data(db: Session = Depends(get_db)):
 @router.get("/actions/grouped-by-purpose")
 def get_grouped_by_purpose(db: Session = Depends(get_db)):
 
-    corporate_data = db.query(CorporateActionData).all()
+    corporate_data = (
+        db.query(CorporateActionData)
+        .order_by(CorporateActionData.ID.desc())
+        .all()
+    )
 
     result_data = db.query(ResultData).all()
+
+    # Remove duplicates
+    seen = set()
+    filtered_data = []
+
+    for d in corporate_data:
+
+        key = (
+            normalize_company(d.COMPANY),
+            normalize_purpose(d.PURPOSE),
+            (d.PURPOSE_VALUE or "").strip(),
+            d.EX_DATE
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        filtered_data.append(d)
 
     grouped = {
         "Bonus": [],
         "Stock Split": [],
         "Dividend": [],
         "Share Buyback": [],
-        "Results": [],
+        "Results": []
     }
 
-    # ---------------- CORPORATE ACTIONS ---------------- #
-
-    for d in corporate_data:
+    # Corporate Actions
+    for d in filtered_data:
 
         purpose = (d.PURPOSE or "").lower()
 
@@ -693,30 +731,29 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
         if "bonus" in purpose:
             grouped["Bonus"].append(item)
 
-        elif "stock split" in purpose or "split" in purpose:
+        elif "split" in purpose:
             grouped["Stock Split"].append(item)
 
         elif "dividend" in purpose:
             grouped["Dividend"].append(item)
 
-        elif "buy back of shares" in purpose:
+        elif "buy back" in purpose or "buyback" in purpose:
             grouped["Share Buyback"].append(item)
 
-       
-
-    # ---------------- RESULTS ---------------- #
-
+    # Results
     for r in result_data:
-
         grouped["Results"].append({
             "id": r.id,
             "scrip_code_symbol": r.scrip_code_symbol,
             "company": to_camel_case(r.company),
             "ex_date": r.Result_date,
-            "purpose": "Results",
+            "purpose": "Results"
         })
 
     return grouped
+
+
+
 @router.get("/data/company/{company_name}")
 def get_by_company(company_name: str, db: Session = Depends(get_db)):
 
