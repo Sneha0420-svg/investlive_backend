@@ -8,7 +8,7 @@ import io
 import re
 from app.database import SessionLocal
 from app.models.action import CorporateActionData, CorporateActionUpload, ResultData, ResultUpload,    ManualEntryUpload
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from app.s3_utils import (
     upload_file_to_s3,
@@ -125,6 +125,9 @@ def normalize_float(value):
 # -----------------------------
 # PURPOSE SPLITTER
 # -----------------------------
+# -----------------------------
+# PURPOSE SPLITTER
+# -----------------------------
 def split_purpose_and_value(text):
 
     if not text:
@@ -173,7 +176,15 @@ def split_purpose_and_value(text):
             None
         )
 
-    # Bonus
+    # Bonus only
+    if text.lower() == "bonus":
+        return (
+            "Bonus",
+            None,
+            None
+        )
+
+    # Bonus Ratio
     bonus_match = re.search(r"(\d+\s*:\s*\d+)", text)
 
     if bonus_match:
@@ -182,18 +193,22 @@ def split_purpose_and_value(text):
             bonus_match.group(1).replace(" ", ""),
             None
         )
-    # DIVIDEND / VALUE
-    div_match = re.search(r'(.+?)\s*-\s*(.+)', text)
+
+    # Dividend / Final Dividend / Special Dividend
+    div_match = re.search(
+        r"^(Final Dividend|Special Dividend|Interim Dividend|Dividend)\s*-\s*Rs\.?\s*-\s*([\d.]+)",
+        text,
+        re.IGNORECASE
+    )
 
     if div_match:
         return (
             div_match.group(1).strip(),
-            div_match.group(2).strip()
+            div_match.group(2).strip(),
+            None
         )
 
-
     return text.strip(), None, None
-
 
 def normalize_purpose_value(value):
 
