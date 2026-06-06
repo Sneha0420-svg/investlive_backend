@@ -732,7 +732,8 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
         key = (
             normalize_company(d.COMPANY),
             normalize_purpose(d.PURPOSE),
-            normalize_purpose_value(d.PURPOSE_VALUE),
+            normalize_purpose_value(d.PURPOSE_VALUE) 
+            if d.PURPOSE_VALUE else "",
             d.EX_DATE
         )
 
@@ -766,6 +767,7 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
             "record_date": d.RECORD_DATE,
             "purpose": d.PURPOSE,
             "purpose_value": d.PURPOSE_VALUE,
+            "premium": d.PREMIUM,
             "face_value": d.FACE_VALUE,
             "bc_start_date": d.BC_START_DATE,
             "bc_end_date": d.BC_END_DATE,
