@@ -196,7 +196,7 @@ def split_purpose_and_value(text):
 
     # Dividend / Final Dividend / Special Dividend
     div_match = re.search(
-        r"^(Final Dividend|Special Dividend|Interim Dividend|Dividend)\s*-\s*Rs\.?\s*-\s*([\d.]+)",
+        r"^(Final Dividend|Special Dividend|Interim Dividend|Dividend)\s*-\s*Rs\.?\s*-?\s*([\d.]+)(?:\s*Per\s*Share)?",
         text,
         re.IGNORECASE
     )
@@ -746,6 +746,7 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
         "Bonus": [],
         "Stock Split": [],
         "Dividend": [],
+        "Rights": [],
         "Share Buyback": [],
         "Results": []
     }
@@ -784,6 +785,9 @@ def get_grouped_by_purpose(db: Session = Depends(get_db)):
 
         elif "buy back" in purpose or "buyback" in purpose:
             grouped["Share Buyback"].append(item)
+
+        elif "rights" in purpose:
+            grouped["Rights"].append(item)
 
     # Results
     for r in result_data:
