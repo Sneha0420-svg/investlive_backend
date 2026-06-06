@@ -182,6 +182,15 @@ def split_purpose_and_value(text):
             bonus_match.group(1).replace(" ", ""),
             None
         )
+    # DIVIDEND / VALUE
+    div_match = re.search(r'(.+?)\s*-\s*(.+)', text)
+
+    if div_match:
+        return (
+            div_match.group(1).strip(),
+            div_match.group(2).strip()
+        )
+
 
     return text.strip(), None, None
 
