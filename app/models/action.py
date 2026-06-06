@@ -15,6 +15,7 @@ class CorporateActionData(Base):
     EX_DATE = Column(Date)
     PURPOSE = Column(String)
     PURPOSE_VALUE = Column(String)
+    PREMIUM = Column(String, nullable=True)
     RECORD_DATE = Column(Date)
 
     FACE_VALUE = Column(String)

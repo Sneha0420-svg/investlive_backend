@@ -128,21 +128,40 @@ def normalize_float(value):
 def split_purpose_and_value(text):
 
     if not text:
-        return None, None
+        return None, None, None
 
-    # Clean text
     text = str(text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
 
-    # -----------------------------
-    # STOCK SPLIT / FACE VALUE SPLIT
-    # Examples:
-    # Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share
-    # Stock Split - From Rs 10/- To Rs 5/-
-    # From Re 1/- To Re 0.5/-
-    # -----------------------------
+    # Rights 1:9 @ Premium 91
+    rights_ratio = re.search(
+        r'Rights?\s+(\d+\s*:\s*\d+)\s*@\s*Premium\s+([\d.]+)',
+        text,
+        re.IGNORECASE
+    )
+
+    if rights_ratio:
+        return (
+            "Rights",
+            rights_ratio.group(1).replace(" ", ""),
+            rights_ratio.group(2)
+        )
+
+    # Right Issue of Equity Shares
+    if re.search(
+        r'Right\s+Issue\s+of\s+Equity\s+Shares',
+        text,
+        re.IGNORECASE
+    ):
+        return (
+            "Rights",
+            None,
+            None
+        )
+
+    # Stock Split
     split_match = re.search(
-        r'From\s+R(?:s|e)\.?\s*([\d.]+).*?To\s+R(?:s|e)\.?\s*([\d.]+)',
+        r"From\s+R(?:s|e)\.?\s*([\d.]+).*?To\s+R(?:s|e)\.?\s*([\d.]+)",
         text,
         re.IGNORECASE
     )
@@ -150,47 +169,23 @@ def split_purpose_and_value(text):
     if split_match:
         return (
             "Stock Split",
-            f"{split_match.group(1)} to {split_match.group(2)}"
+            f"{split_match.group(1)} to {split_match.group(2)}",
+            None
         )
 
-    # -----------------------------
-    # BONUS ISSUE
-    # Examples:
-    # Bonus Issue - 1:1
-    # Bonus - 2:5
-    # -----------------------------
-    bonus_match = re.search(
-        r'(\d+\s*:\s*\d+)',
-        text
-    )
+    # Bonus
+    bonus_match = re.search(r"(\d+\s*:\s*\d+)", text)
 
     if bonus_match:
-        value = bonus_match.group(1).replace(" ", "")
-
-        purpose = (
-            text
-            .replace(bonus_match.group(1), "")
-            .strip(" -")
-        )
-
-        return purpose, value
-
-    # -----------------------------
-    # DIVIDEND / OTHER PURPOSES
-    # Examples:
-    # Interim Dividend - Rs 5 Per Share
-    # Final Dividend - Rs 10 Per Share
-    # -----------------------------
-    div_match = re.search(
-        r'(.+?)\s*-\s*(.+)',
-        text
-    )
-
-    if div_match:
         return (
-            div_match.group(1).strip(),
-            div_match.group(2).strip()
+            "Bonus",
+            bonus_match.group(1).replace(" ", ""),
+            None
         )
+
+    return text.strip(), None, None
+
+
 def normalize_purpose_value(value):
 
     if not value:
@@ -198,22 +193,15 @@ def normalize_purpose_value(value):
 
     value = str(value).strip().lower()
 
-    # Bonus ratio
-    ratio = re.search(r'(\d+\s*:\s*\d+)', value)
+    ratio = re.search(r"(\d+\s*:\s*\d+)", value)
     if ratio:
         return ratio.group(1).replace(" ", "")
 
-    # First numeric value
-    number = re.search(r'(\d+(?:\.\d+)?)', value)
-
+    number = re.search(r"(\d+(?:\.\d+)?)", value)
     if number:
         return str(float(number.group(1)))
 
     return value
-    # -----------------------------
-    # DEFAULT
-    # -----------------------------
-    return text, None
 
 def to_camel_case(text):
     if not text:
@@ -298,7 +286,7 @@ async def upload_csv(
 
             # PURPOSE SPLIT
             purpose_text = row.get("Purpose", "").strip()
-            purpose, purpose_value = split_purpose_and_value(purpose_text)
+            purpose, purpose_value, premium = split_purpose_and_value(purpose_text)
 
             # INSERT
             data = CorporateActionData(
@@ -312,6 +300,7 @@ async def upload_csv(
 
                 PURPOSE=purpose,
                 PURPOSE_VALUE=str(purpose_value) if purpose_value else None,
+                PREMIUM=str(premium).strip() if premium else None,
 
                 FACE_VALUE=normalize_float(row.get("FACE VALUE")),
 
@@ -454,6 +443,7 @@ async def add_corporate_action(
     actual_payment_date: Optional[date] = Form(None),
 
     result_date: Optional[date] = Form(None),
+    premium: Optional[str] = Form(None),
 
     db: Session = Depends(get_db)
 ):
@@ -484,6 +474,10 @@ async def add_corporate_action(
             and
             normalize_purpose_value(row.PURPOSE_VALUE) ==
             normalize_purpose_value(purpose_value)
+            and
+            normalize_float(row.PREMIUM) == normalize_float(premium)==
+            
+            normalize_float(premium) is not None
         ):
                 
                 raise HTTPException(
@@ -529,6 +523,7 @@ async def add_corporate_action(
 
             PURPOSE=purpose.strip() if purpose else None,
             PURPOSE_VALUE=purpose_value.strip() if purpose_value else None,
+            PREMIUM=str(premium).strip() if premium else None,
 
             FACE_VALUE=normalize_float(face_value),
 
