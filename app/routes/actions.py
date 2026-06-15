@@ -196,7 +196,7 @@ def split_purpose_and_value(text):
 
     # Dividend / Final Dividend / Special Dividend
     div_match = re.search(
-        r"^(Final Dividend|Special Dividend|Interim Dividend|Dividend)\s*-\s*Rs\.?\s*-?\s*([\d.]+)(?:\s*Per\s*Share)?",
+        r"^(Final Dividend|Special Dividend|Interim Dividend|Dividend)\s*-\s*R(?:s|e)\.?\s*-?\s*([\d.]+)(?:\s*Per\s*Share)?",
         text,
         re.IGNORECASE
     )
