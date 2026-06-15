@@ -450,13 +450,13 @@ async def add_corporate_action(
     company_name: str = Form(...),
     series: Optional[str] = Form(None),
 
-    ex_date:Optional[date] = Form(None),
+    ex_date: Optional[date] = Form(None),
     record_date: Optional[date] = Form(None),
 
     purpose: str = Form(None),
     purpose_value: Optional[str] = Form(None),
 
-    face_value:Optional[float] = Form(None),
+    face_value: Optional[float] = Form(None),
 
     bc_start_date: Optional[date] = Form(None),
     bc_end_date: Optional[date] = Form(None),
@@ -471,7 +471,6 @@ async def add_corporate_action(
 
     db: Session = Depends(get_db)
 ):
-
     try:
 
         company = normalize_company(company_name)
@@ -481,41 +480,40 @@ async def add_corporate_action(
                 status_code=400,
                 detail="Government companies not allowed"
             )
-            
+
         # ==================================================
         # DUPLICATE CHECK
         # ==================================================
         existing_rows = db.query(CorporateActionData).filter(
-                    func.lower(CorporateActionData.COMPANY) == company.lower(),
-                    CorporateActionData.EX_DATE == ex_date
-                ).all()
+            func.lower(CorporateActionData.COMPANY) == company.lower(),
+            CorporateActionData.EX_DATE == ex_date
+        ).all()
 
         for row in existing_rows:
 
             if (
-            normalize_purpose(row.PURPOSE) ==
-            normalize_purpose(purpose)
-            and
-            normalize_purpose_value(row.PURPOSE_VALUE) ==
-            normalize_purpose_value(purpose_value)
-            and
-            normalize_float(row.PREMIUM) == normalize_float(premium)==
-            
-            normalize_float(premium) is not None
-        ):
-                
+                normalize_purpose(row.PURPOSE) ==
+                normalize_purpose(purpose)
+                and
+                normalize_purpose_value(row.PURPOSE_VALUE) ==
+                normalize_purpose_value(purpose_value)
+                and
+                normalize_float(row.PREMIUM) ==
+                normalize_float(premium)
+                and
+                normalize_float(premium) is not None
+            ):
+
                 raise HTTPException(
-            status_code=400,
-            detail="Corporate action already exists"
-        )
-        
+                    status_code=400,
+                    detail="Corporate action already exists"
+                )
 
         # ==================================================
         # RESULT ENTRY
         # ==================================================
-        if purpose and purpose.strip().lower() == "Results":
+        if purpose and purpose.strip().lower() == "results":
 
-            # STORE RESULT DATA
             result_data = ResultData(
                 scrip_code_symbol=scrip_code.strip(),
                 company=company,
@@ -523,9 +521,6 @@ async def add_corporate_action(
             )
 
             db.add(result_data)
-
-
-
             db.commit()
 
             return {
@@ -533,9 +528,23 @@ async def add_corporate_action(
             }
 
         # ==================================================
+        # CREATE MANUAL ENTRY FIRST
+        # ==================================================
+        manual_entry = ManualEntryUpload(
+            company_name=to_camel_case(company_name),
+            purpose=purpose.strip() if purpose else None,
+            entry_date=date.today()
+        )
+
+        db.add(manual_entry)
+        db.flush()  # Generates manual_entry.id
+
+        # ==================================================
         # CORPORATE ACTION ENTRY
         # ==================================================
         data = CorporateActionData(
+
+            MANUAL_ENTRY_ID=manual_entry.id,
 
             SCRIP_CODE_SYMBOL=scrip_code.strip(),
             SECURITY_NAME=security_name.strip() if security_name else None,
@@ -561,23 +570,16 @@ async def add_corporate_action(
         )
 
         db.add(data)
-        db.flush()
-
-       
-
-        # STORE MANUAL ENTRY RECORD
-        manual_entry = ManualEntryUpload(
-            company_name=to_camel_case(company_name),
-            purpose=purpose.strip() if purpose else None,
-            entry_date=date.today()
-        )
-
-        db.add(manual_entry)
         db.commit()
 
         return {
-            "message": "Corporate action added successfully"
+            "message": "Corporate action added successfully",
+            "manual_entry_id": manual_entry.id,
+            "corporate_action_id": data.ID
         }
+
+    except HTTPException:
+        raise
 
     except Exception as e:
 
@@ -587,9 +589,7 @@ async def add_corporate_action(
             status_code=500,
             detail=str(e)
         )
-
-
-
+        
 @router.get("/uploads")
 def get_uploads(db: Session = Depends(get_db)):
 
@@ -1015,7 +1015,6 @@ async def delete_manual_upload(
     id: int,
     db: Session = Depends(get_db)
 ):
-
     try:
 
         entry = db.query(ManualEntryUpload).filter(
@@ -1028,18 +1027,20 @@ async def delete_manual_upload(
                 detail="Manual entry not found"
             )
 
+        db.query(CorporateActionData).filter(
+            CorporateActionData.MANUAL_ENTRY_ID == id
+        ).delete(synchronize_session=False)
+
         db.delete(entry)
 
         db.commit()
 
         return {
-            "message": "Manual entry deleted successfully"
+            "message": "Manual entry and related corporate action deleted successfully"
         }
 
     except Exception as e:
-
         db.rollback()
-
         raise HTTPException(
             status_code=500,
             detail=str(e)

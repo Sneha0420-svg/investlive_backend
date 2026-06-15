@@ -6,6 +6,7 @@ class CorporateActionData(Base):
     __tablename__ = "corporate_actions"
 
     ID = Column(Integer, primary_key=True, index=True)
+    MANUAL_ENTRY_ID = Column(Integer, nullable=True)
 
     SCRIP_CODE_SYMBOL = Column(String, nullable=False)
     SECURITY_NAME = Column(String, nullable=True)
