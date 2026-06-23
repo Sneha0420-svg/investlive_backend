@@ -121,7 +121,7 @@ async def upload_multiple_data(
             df[col] = df[col].apply(parse_date_safe)
 
         df = df.where(pd.notnull(df), None)
-
+        df = df.drop_duplicates(subset=["ISIN"], keep="first")
         # Save IPO data rows
         for _, row in df.iterrows():
             all_records.append(
