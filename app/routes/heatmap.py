@@ -286,14 +286,19 @@ def get_latest_upload_all_data(
 ):
     """
     Fetch all rows from the latest uploaded CSV for the given data_type.
-    No row limit applied.
     """
     data_type = data_type.lower()
     if data_type not in UPLOAD_TABLES:
         raise HTTPException(status_code=400, detail="Invalid data_type")
 
     UploadModel = UPLOAD_TABLES[data_type]
-    latest_upload = db.query(UploadModel).order_by(UploadModel.data_date.desc()).first()
+
+    latest_upload = (
+        db.query(UploadModel)
+        .order_by(UploadModel.data_date.desc())
+        .first()
+    )
+
     if not latest_upload:
         raise HTTPException(status_code=404, detail="No uploads found")
 
@@ -302,16 +307,8 @@ def get_latest_upload_all_data(
         raise HTTPException(status_code=404, detail="File not found in S3")
 
     df = read_csv_safe(file_stream, COLUMN_MAP[data_type])
-    
-    # Convert all rows (no limit)
-    records = df.to_dict(orient="records")
 
-    # Add S3 URL to each record
-    s3_url = get_s3_file_url(latest_upload.file_path)
-    for record in records:
-        record["_s3_url"] = s3_url
-
-    return records
+    return df.to_dict(orient="records")
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
 def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db)):

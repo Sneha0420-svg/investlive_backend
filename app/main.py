@@ -42,6 +42,7 @@ from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
 from app.routes.actions import router as corporate_action_router
 from app.routes.news_api import router as livenews_router
+from fastapi.middleware.gzip import GZipMiddleware
 
 # =========================
 # APP INIT (DISABLE DEFAULT DOCS)
@@ -65,6 +66,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # CORS
 # =========================
 app.add_middleware(
+    GZipMiddleware,
     CORSMiddleware,
     allow_origins=["*"],   # change in production
     allow_credentials=True,
