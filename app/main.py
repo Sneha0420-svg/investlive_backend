@@ -62,16 +62,24 @@ app = FastAPI(
 os.makedirs("uploads/news", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+
 # =========================
 # CORS
 # =========================
 app.add_middleware(
-    GZipMiddleware,
     CORSMiddleware,
     allow_origins=["*"],   # change in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# =========================
+# GZIP
+# =========================
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,   # Compress responses larger than 1 KB
 )
 
 # =========================
