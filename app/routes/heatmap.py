@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import List
 import math
-
+from fastapi import Query
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
@@ -309,6 +309,73 @@ def get_latest_upload_all_data(
     df = read_csv_safe(file_stream, COLUMN_MAP[data_type])
 
     return df.to_dict(orient="records")
+
+
+@router.get("/latest-data-file/")
+def get_companies(
+    page: int = 1,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+
+    offset = (page - 1) * limit
+
+    total = db.query(Company).count()
+
+    companies = (
+        db.query(Company)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": math.ceil(total / limit),
+        "data": companies
+    }
+
+@router.get("/{data_type}/data/")
+def get_data(
+    data_type: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db)
+):
+    """
+    Get paginated data from the database for the specified data type.
+    Example:
+    /heatmap/company/data?page=1&limit=100
+    """
+
+    data_type = data_type.lower()
+
+    if data_type not in TABLE_MAP:
+        raise HTTPException(status_code=400, detail="Invalid data_type")
+
+    Model, _ = TABLE_MAP[data_type]
+
+    total = db.query(Model).count()
+
+    offset = (page - 1) * limit
+
+    rows = (
+        db.query(Model)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": math.ceil(total / limit),
+        "count": len(rows),
+        "data": rows
+    }
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
 def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db)):
