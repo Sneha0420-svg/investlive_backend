@@ -5,6 +5,7 @@ from typing import List
 import math
 from fastapi import Query
 from sqlalchemy import or_
+from sqlalchemy import func
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
@@ -376,7 +377,10 @@ def get_data(
     if sector:
         query = query.filter(Model.SEC_ID == sector)
     if house:
-        query = query.filter(Model.IH_MNAME == house)
+        query = query.filter(
+        func.lower(func.trim(Model.IH_MNAME))
+        == house.strip().lower()
+    )
     # Index
     if index is not None:
         query = query.filter(Model.INDEX_STK == index)
