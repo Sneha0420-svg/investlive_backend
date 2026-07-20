@@ -345,6 +345,7 @@ def get_data(
     limit: int = Query(100, ge=1),
     search: str | None = None,
     sector: str | None = None,
+    house: str | None = None,
     index: int | None = None,
     year: int | None = None,
     db: Session = Depends(get_db),
@@ -374,7 +375,8 @@ def get_data(
     # Sector
     if sector:
         query = query.filter(Model.SEC_ID == sector)
-
+    if house:
+        query = query.filter(Model.IH_MNAME == house)
     # Index
     if index is not None:
         query = query.filter(Model.INDEX_STK == index)
