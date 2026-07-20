@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import List
 import math
 from fastapi import Query
+from sqlalchemy import or_
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
@@ -341,15 +342,13 @@ def get_companies(
 def get_data(
     data_type: str,
     page: int = Query(1, ge=1),
-    limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db)
+    limit: int = Query(100, ge=1),
+    search: str | None = None,
+    sector: str | None = None,
+    index: int | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
 ):
-    """
-    Get paginated data from the database for the specified data type.
-    Example:
-    /heatmap/company/data?page=1&limit=100
-    """
-
     data_type = data_type.lower()
 
     if data_type not in TABLE_MAP:
@@ -357,13 +356,38 @@ def get_data(
 
     Model, _ = TABLE_MAP[data_type]
 
-    total = db.query(Model).count()
+    query = db.query(Model)
 
-    offset = (page - 1) * limit
+    # Search
+    if search:
+        search = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Model.COMPANY.ilike(search),
+                Model.COMPANY_NAME.ilike(search),
+                Model.NSE.ilike(search),
+                Model.BSE.ilike(search),
+                Model.ISIN.ilike(search),
+            )
+        )
 
-    rows = (
-        db.query(Model)
-        .offset(offset)
+    # Sector
+    if sector:
+        query = query.filter(Model.SEC_ID == sector)
+
+    # Index
+    if index is not None:
+        query = query.filter(Model.INDEX_STK == index)
+
+    # Year (only if your table has YEAR)
+    if year is not None and hasattr(Model, "YEAR"):
+        query = query.filter(Model.YEAR == year)
+
+    total = query.count()
+
+    data = (
+        query
+        .offset((page - 1) * limit)
         .limit(limit)
         .all()
     )
@@ -373,8 +397,8 @@ def get_data(
         "page": page,
         "limit": limit,
         "pages": math.ceil(total / limit),
-        "count": len(rows),
-        "data": rows
+        "count": len(data),
+        "data": data,
     }
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
