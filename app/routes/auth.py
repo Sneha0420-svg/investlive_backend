@@ -8,9 +8,10 @@ from typing import Optional
 
 from app.models.auth import User
 from app.database import SessionLocal
-from app.utils.jwt import create_access_token
+from app.utils.jwt import create_access_token,create_transfer_token
 from app.utils.security import hash_password, verify_password
 from datetime import datetime
+from app.utils.jwt import verify_transfer_token
 
 # -----------------------
 # DB Dependency
@@ -211,7 +212,30 @@ def get_all_users(db: Session = Depends(get_db)):
         }
         for user in users
     ]
-    
+
+@router.post("/consume-transfer-token")
+def consume_transfer_token(
+    transfer_token: str = Body(..., embed=True)
+):
+    payload = verify_transfer_token(transfer_token)
+
+    if not payload:
+        raise HTTPException(401, "Invalid token")
+
+    access_token = create_access_token({
+        "sub": str(payload["userid"])
+    })
+
+    return {
+        "access_token": access_token,
+        "user": {
+            "userid": payload["userid"],
+            "name": payload["name"],
+            "email": payload["email"],
+            "phone": payload["phone"],
+            "profession": payload["profession"]
+        }
+    }   
 @router.put("/update-last-seen")
 def update_last_seen(
     userid: int = Body(...),
@@ -254,4 +278,31 @@ def forgot_password(
             "email": user.email,
             "phone":user.phone
         }
+    }
+    
+@router.post("/transfer-token")
+def transfer_token(
+    userid: int = Body(..., embed=True),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.userid == userid).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    token = create_transfer_token(
+        {
+            "userid": user.userid,
+            "name": user.name,
+            "email": user.email,
+            "phone": user.phone,
+            "profession": user.profession,
+        }
+    )
+
+    return {
+        "transfer_token": token
     }

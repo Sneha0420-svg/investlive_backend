@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 
+from jose import JWTError
 import jwt  # PyJWT library
 from fastapi import HTTPException, status
 
@@ -30,3 +31,29 @@ def verify_access_token(token: str):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except jwt.JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+# Transfer token expires quickly
+TRANSFER_TOKEN_EXPIRE_MINUTES = 2
+TRANSFER_SECRET_KEY = "investlive-investvault-transfer"
+
+def create_transfer_token(data: dict):
+    payload = data.copy()
+
+    payload["exp"] = datetime.utcnow() + timedelta(minutes=2)
+
+    return jwt.encode(
+        payload,
+        TRANSFER_SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+    
+def verify_transfer_token(token: str):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+        return payload
+    except JWTError:
+        return None

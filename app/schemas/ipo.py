@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import date
 
 class DataUploadBase(BaseModel):
@@ -70,5 +70,7 @@ class UploadSummaryResponse(BaseModel):
     file_name: str
     file_link: str
     records_inserted: Optional[int]
+    duplicate_count: Optional[int] = 0
+    duplicate_isins: Optional[List[str]] = []
     class Config:
         from_attributes = True

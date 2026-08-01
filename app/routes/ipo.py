@@ -56,6 +56,7 @@ def clean_objs(objs):
 
 
 # -------------------- Upload Endpoint --------------------
+# -------------------- Upload Endpoint --------------------
 @router.post("/upload", response_model=List[UploadSummaryResponse])
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -63,49 +64,70 @@ async def upload_multiple_data(
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    all_records = []
-
-    # Delete existing data for this date combination
+    # Remove previous IPO data
     db.query(DataUpload).delete(synchronize_session=False)
     db.commit()
 
     response_list = []
 
     for file in files:
+
+        all_records = []
+
         contents = await file.read()
         file_stream = io.BytesIO(contents)
 
-        # Upload file to S3
+        # Upload original file to S3
         s3_key = upload_file_to_s3(io.BytesIO(contents), "ipo")
 
-        # Create IPOUpload record
         upload_record = IPOUpload(
             upload_date=upload_date,
             data_type=data_type,
             file_name=file.filename,
             file_path=s3_key
         )
+
         db.add(upload_record)
         db.commit()
         db.refresh(upload_record)
 
-        # Generate presigned URL
         presigned_url = get_s3_file_url(upload_record.file_path)
 
-        # Read file into pandas
+        # ---------------- Read File ----------------
+
         if file.filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(file_stream)
+
         elif file.filename.endswith(".csv"):
+
             try:
-                df = pd.read_csv(file_stream, encoding="utf-8", on_bad_lines='skip')
+                df = pd.read_csv(
+                    file_stream,
+                    encoding="utf-8",
+                    on_bad_lines="skip"
+                )
+
             except UnicodeDecodeError:
+
                 file_stream.seek(0)
-                df = pd.read_csv(file_stream, encoding="latin1", on_bad_lines='skip')
+
+                df = pd.read_csv(
+                    file_stream,
+                    encoding="latin1",
+                    on_bad_lines="skip"
+                )
+
         else:
-            raise HTTPException(400, "Invalid file type")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file type"
+            )
 
         if df.shape[1] != 47:
-            raise HTTPException(400, "File must have exactly 47 columns")
+            raise HTTPException(
+                status_code=400,
+                detail="File must have exactly 47 columns"
+            )
 
         df.columns = [
             "ISIN","CO_NAME","IBR_NAME","ISS_OPEN","ISS_CLOSE","ALLOTMENT_DATE","REFUND_DT",
@@ -116,15 +138,82 @@ async def upload_multiple_data(
             "LM13","LM14","LM15","MKTMKR1","MKTMKR2","MKTMKR3","MKTMKR4","MKTMKR5"
         ]
 
-        date_cols = ["ISS_OPEN","ISS_CLOSE","ALLOTMENT_DATE","REFUND_DT","DEMAT_DT","TRADING_DT","LISTED_DT"]
+        # ---------------- Parse Dates ----------------
+
+        date_cols = [
+            "ISS_OPEN",
+            "ISS_CLOSE",
+            "ALLOTMENT_DATE",
+            "REFUND_DT",
+            "DEMAT_DT",
+            "TRADING_DT",
+            "LISTED_DT"
+        ]
+
         for col in date_cols:
             df[col] = df[col].apply(parse_date_safe)
 
+        # Replace NaN with None
         df = df.where(pd.notnull(df), None)
-        df = df.drop_duplicates(subset=["ISIN"], keep="first")
-        # Save IPO data rows
+
+        # ---------------- Clean ISIN ----------------
+
+        df["ISIN"] = df["ISIN"].apply(
+            lambda x: str(x).strip() if x is not None else None
+        )
+
+        # Valid ISIN rows
+        valid_isin_df = df[
+            df["ISIN"].notna() &
+            (df["ISIN"] != "") &
+            (df["ISIN"].str.lower() != "none")
+        ].copy()
+
+        # Empty ISIN rows
+        empty_isin_df = df[
+            df["ISIN"].isna() |
+            (df["ISIN"] == "") |
+            (df["ISIN"].str.lower() == "none")
+        ].copy()
+
+        # ---------------- Duplicate Detection ----------------
+
+        duplicate_rows = valid_isin_df[
+            valid_isin_df.duplicated(
+                subset=["ISIN"],
+                keep=False
+            )
+        ]
+
+        duplicate_isins = sorted(
+            duplicate_rows["ISIN"].unique().tolist()
+        )
+
+        duplicate_count = len(duplicate_rows)
+
+        # Keep only first occurrence
+        valid_isin_df = valid_isin_df.drop_duplicates(
+            subset=["ISIN"],
+            keep="first"
+        )
+
+        # Merge back
+        df = pd.concat(
+            [valid_isin_df, empty_isin_df],
+            ignore_index=True
+        )
+
+        print("Original :", len(valid_isin_df) + duplicate_count + len(empty_isin_df))
+        print("Inserted :", len(df))
+        print("Duplicates :", duplicate_count)
+        print("Duplicate ISINs :", duplicate_isins)
+
+        # ---------------- Insert ----------------
+
         for _, row in df.iterrows():
+
             all_records.append(
+
                 DataUpload(
                     isin=row.get("ISIN"),
                     co_name=row.get("CO_NAME"),
@@ -175,6 +264,7 @@ async def upload_multiple_data(
                     mktmkr5=row.get("MKTMKR5"),
                     upload_date=upload_date,
                 )
+
             )
 
         db.bulk_save_objects(all_records)
@@ -187,12 +277,13 @@ async def upload_multiple_data(
                 data_type=upload_record.data_type,
                 file_name=upload_record.file_name,
                 file_link=presigned_url,
-                records_inserted=len(all_records)
+                records_inserted=len(all_records),
+                duplicate_count=duplicate_count,
+                duplicate_isins=duplicate_isins,
             )
         )
 
     return response_list
-
 # -------------------- Get Uploads --------------------
 @router.get("/uploads", response_model=List[UploadSummaryResponse])
 def get_uploads_summary(db: Session = Depends(get_db)):

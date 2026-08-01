@@ -406,6 +406,43 @@ def get_data(
         "count": len(data),
         "data": data,
     }
+@router.get("/company/top-mcap")
+def get_top_mcap_companies(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    companies = (
+        db.query(Company)
+        .filter(Company.MCAP.isnot(None))
+        .order_by(Company.MCAP.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "count": len(companies),
+        "data": companies,
+    }
+    
+@router.get("/company/sector-peers/{sec_id}")
+def get_sector_peers(
+    sec_id: str,
+    exclude_isin: str | None = None,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    query = db.query(Company).filter(Company.SEC_ID == sec_id)
+
+    if exclude_isin:
+        query = query.filter(Company.ISIN != exclude_isin)
+
+    peers = (
+        query.order_by(Company.MCAP.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return peers
 # ---------------- Download File ----------------
 @router.get("/{data_type}/files/{upload_id}/")
 def download_file(data_type: str, upload_id: int, db: Session = Depends(get_db)):

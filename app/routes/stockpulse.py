@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-
+from sqlalchemy import and_
 from app.database import SessionLocal
 from app.models.stockpulse import StockPulseData, StockPulseUpload
 from app.schemas.stockpulse import StockPulseUploadSchema, StockPulseLatestResponse
@@ -208,7 +208,35 @@ def latest_stockpulse(db: Session = Depends(get_db)):
         "type": latest.data_type,
         "records": records,
     }
+from sqlalchemy import and_
 
+@router.get("/hotstocks")
+def get_hotstocks(
+    db: Session = Depends(get_db),
+):
+    query = db.query(StockPulseData).filter(
+        and_(
+            StockPulseData.cmp > StockPulseData.dma_5,
+            StockPulseData.dma_5 > StockPulseData.dma_21,
+            StockPulseData.dma_21 > StockPulseData.dma_60,
+            StockPulseData.dma_60 > StockPulseData.dma_245,
+            StockPulseData.pulse_score == 100,
+        )
+    )
+
+    total = query.count()
+
+    records = (
+        query
+        .order_by(StockPulseData.cmp.desc())
+        .all()
+    )
+
+    return {
+        "total": total,
+        "count": len(records),
+        "data": records,
+    }
 # -------------------- GET STOCK BY ISIN --------------------
 @router.get("/{isin}", response_model=StockPulseLatestResponse)
 def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
@@ -227,6 +255,8 @@ def get_stock_by_isin(isin: str, db: Session = Depends(get_db)):
         "type": record.type,
         "records": [stock_dict]
     }
+    
+
 @router.put("/upload/{upload_id}")
 async def update_stockpulse_upload(
     upload_id: int,

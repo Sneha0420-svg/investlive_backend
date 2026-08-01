@@ -42,6 +42,8 @@ from app.routes.pricemoving import router as pricemoving_router
 from app.routes.volumemoving import router as volumemoving_router
 from app.routes.actions import router as corporate_action_router
 from app.routes.news_api import router as livenews_router
+from app.routes.files import router as files_router
+from app.routes.cart import router as cart_router
 from fastapi.middleware.gzip import GZipMiddleware
 
 # =========================
@@ -50,10 +52,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-    docs_url=None,          # disable default docs
-    redoc_url=None,         # disable default redoc
-    openapi_url="/openapi.json",
-    root_path="/api"
+    # docs_url=None,          # disable default docs
+    # redoc_url=None,         # disable default redoc
+    # openapi_url="/openapi.json",
+    # root_path="/api"
 )
 
 # =========================
@@ -108,14 +110,14 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/api/openapi.json", 
+        openapi_url="/openapi.json", 
         title="Investlive API Docs"
     )
 
 @app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/api/openapi.json",
+        openapi_url="/openapi.json",
         
         title="Investlive ReDoc"
     )
