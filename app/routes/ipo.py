@@ -158,50 +158,38 @@ async def upload_multiple_data(
 
         # ---------------- Clean ISIN ----------------
 
-        df["ISIN"] = df["ISIN"].apply(
-            lambda x: str(x).strip() if x is not None else None
-        )
-
-        # Valid ISIN rows
-        valid_isin_df = df[
-            df["ISIN"].notna() &
-            (df["ISIN"] != "") &
-            (df["ISIN"].str.lower() != "none")
-        ].copy()
-
-        # Empty ISIN rows
-        empty_isin_df = df[
-            df["ISIN"].isna() |
-            (df["ISIN"] == "") |
-            (df["ISIN"].str.lower() == "none")
-        ].copy()
-
+        def normalize_isin(value):
+            if pd.isna(value):
+                return None
+            value = str(value).strip()
+            if value.lower() in ("", "none", "nan", "null", "nat"):
+                return None
+            return value
+        df["ISIN"] = df["ISIN"].apply(normalize_isin) 
+        valid_isin_df = df[df["ISIN"].notna()].copy()
+        empty_isin_df = df[df["ISIN"].isna()].copy() 
+        
+       
         # ---------------- Duplicate Detection ----------------
-
         duplicate_rows = valid_isin_df[
-            valid_isin_df.duplicated(
-                subset=["ISIN"],
-                keep=False
-            )
+            valid_isin_df.duplicated(subset=["ISIN"], keep=False)
         ]
 
         duplicate_isins = sorted(
             duplicate_rows["ISIN"].unique().tolist()
         )
 
-        duplicate_count = len(duplicate_rows)
+        duplicate_count = (
+            len(valid_isin_df)
+            - len(valid_isin_df.drop_duplicates(subset=["ISIN"], keep="first"))
+        )
 
-        # Keep only first occurrence
         valid_isin_df = valid_isin_df.drop_duplicates(
             subset=["ISIN"],
             keep="first"
         )
 
-        # Merge back
-        df = pd.concat(
-            [valid_isin_df, empty_isin_df],
-            ignore_index=True
-        )
+        df = pd.concat([valid_isin_df, empty_isin_df], ignore_index=True)
 
         print("Original :", len(valid_isin_df) + duplicate_count + len(empty_isin_df))
         print("Inserted :", len(df))

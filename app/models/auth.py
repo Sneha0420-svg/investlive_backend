@@ -3,7 +3,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from app.database import Base
 from datetime import datetime
-
+from sqlalchemy.orm import relationship
 
 class User(Base):
     __tablename__ = "users"
@@ -30,6 +30,17 @@ class User(Base):
         onupdate=datetime.utcnow,
         nullable=False
     )
+    purchase_orders = relationship(
+    "PurchaseOrder",
+    back_populates="user",
+    cascade="all, delete-orphan"
+)
+
+    purchased_documents = relationship(
+    "PurchasedDocument",
+    back_populates="user",
+    cascade="all, delete-orphan"
+)
 
     def __repr__(self):
         return f"<User(userid={self.userid}, email={self.email})>"

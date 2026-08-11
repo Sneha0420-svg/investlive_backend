@@ -61,6 +61,7 @@ from app.models.ipotrack import IpoTrack,IpoTrackUpload
 from app.models.action import CorporateActionData, CorporateActionUpload,ResultData, ResultUpload,ManualEntryUpload
 from app.models.cart import Cart
 from app.models.file import CompanyFile
+from app.models.purchase import PurchaseOrder, PurchasedDocument,PurchaseOrderItem
 # Base.metadata.drop_all(bind=engine)
 # This creates all tables based on your models
 Base.metadata.create_all(bind=engine)

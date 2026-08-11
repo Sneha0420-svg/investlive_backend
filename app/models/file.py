@@ -9,7 +9,6 @@ class CompanyFile(Base):
     __tablename__ = "reports"
 
     id = Column(Integer, primary_key=True, index=True)
-
     document_id = Column(
         String(20),
         unique=True,
