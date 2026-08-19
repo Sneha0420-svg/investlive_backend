@@ -89,7 +89,7 @@ async def upload_report(
     year: int = Form(...),
     document_type: str = Form(...),
     treasure: str = Form(...),
-    price: float = Form(199),
+    price: float = Form(299),
 
     file: UploadFile = File(...),
 
