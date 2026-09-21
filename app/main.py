@@ -54,10 +54,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-    docs_url=None,          # disable default docs
-    redoc_url=None,         # disable default redoc
-    openapi_url="/openapi.json",
-    # root_path="/api"
+    docs_url=None,
+    redoc_url=None,
+    openapi_url="/api/openapi.json",
 )
 
 # =========================
@@ -112,14 +111,14 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/api/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/openapi.json", 
+        openapi_url="/api/openapi.json", 
         title="Investlive API Docs"
     )
 
 @app.get("/api/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/openapi.json",
+        openapi_url="/api/openapi.json",
         
         title="Investlive ReDoc"
     )
