@@ -57,7 +57,7 @@ app = FastAPI(
     docs_url=None,          # disable default docs
     redoc_url=None,         # disable default redoc
     openapi_url="/openapi.json",
-    root_path="/api"
+    # root_path="/api"
 )
 
 # =========================

@@ -56,7 +56,6 @@ def clean_objs(objs):
 
 
 # -------------------- Upload Endpoint --------------------
-# -------------------- Upload Endpoint --------------------
 @router.post("/upload", response_model=List[UploadSummaryResponse])
 async def upload_multiple_data(
     files: List[UploadFile] = File(...),
@@ -64,6 +63,7 @@ async def upload_multiple_data(
     data_type: str = Form(...),
     db: Session = Depends(get_db)
 ):
+    
     # Remove previous IPO data
     db.query(DataUpload).delete(synchronize_session=False)
     db.commit()

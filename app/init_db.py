@@ -55,7 +55,7 @@ from app.models.volumemoving import VolumeMoving
 from app.models.marketpulse import (
     StockPulseTable, StockPulseTableUpload, StockPulseIndex,StockPulseIndexUpload
 )
-from app.models.ads import Ad
+from app.models.ads import Ad,VideoAd
 from app.models.ipoevents import IPOEvents, IPOEventsUpload
 from app.models.ipotrack import IpoTrack,IpoTrackUpload
 from app.models.action import CorporateActionData, CorporateActionUpload,ResultData, ResultUpload,ManualEntryUpload
