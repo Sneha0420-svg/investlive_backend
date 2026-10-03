@@ -13,11 +13,12 @@ class Ad(Base):
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     
 class VideoAd(Base):
-    
     __tablename__ = "video_ads"
 
     id = Column(Integer, primary_key=True, index=True)
-    video_path = Column(String(500), nullable=False)  # S3 key
+
+    video_path = Column(String(500), nullable=True)  # S3 key
+    image_path = Column(String(500), nullable=True)   # Image S3 key
 
     uploaded_at = Column(
         DateTime(timezone=True),

@@ -148,11 +148,19 @@ def delete_ad(ad_id: int, db: Session = Depends(get_db)):
 
 @router.post("/videos", response_model=VideoAdResponse)
 async def upload_video(
-    video: UploadFile = File(...),
+    video: UploadFile = File(None),
+    image: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
+    # At least one file is required
+    if not video and not image:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload at least a video or image"
+        )
+
     # Allowed video formats
-    allowed_extensions = (
+    allowed_video_extensions = (
         ".mp4",
         ".mov",
         ".avi",
@@ -160,49 +168,110 @@ async def upload_video(
         ".webm",
     )
 
-    if not video.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Video filename is required"
-        )
+    # Allowed image formats
+    allowed_image_extensions = (
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    )
 
-    if not video.filename.lower().endswith(allowed_extensions):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid video file type"
-        )
+    video_s3_key = None
+    image_s3_key = None
 
-    # Upload video to S3
-    try:
-        s3_key = upload_file_to_s3(
-            file_obj=video.file,
-            folder="videos",
-            filename=f"{uuid.uuid4()}_{video.filename}"
-        )
+    # -------------------------
+    # Upload Video if provided
+    # -------------------------
+    if video:
+        if not video.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="Video filename is required"
+            )
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"S3 video upload failed: {e}"
-        )
+        if not video.filename.lower().endswith(
+            allowed_video_extensions
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid video file type"
+            )
 
-    # Save video information in database
+        try:
+            video_s3_key = upload_file_to_s3(
+                file_obj=video.file,
+                folder="videos",
+                filename=f"{uuid.uuid4()}_{video.filename}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"S3 video upload failed: {e}"
+            )
+
+    # -------------------------
+    # Upload Image if provided
+    # -------------------------
+    if image:
+        if not image.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="Image filename is required"
+            )
+
+        if not image.filename.lower().endswith(
+            allowed_image_extensions
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid image file type"
+            )
+
+        try:
+            image_s3_key = upload_file_to_s3(
+                file_obj=image.file,
+                folder="video-images",
+                filename=f"{uuid.uuid4()}_{image.filename}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"S3 image upload failed: {e}"
+            )
+
+    # -------------------------
+    # Save to database
+    # -------------------------
     video_ad = VideoAd(
-        video_path=s3_key
+        video_path=video_s3_key,
+        image_path=image_s3_key,
     )
 
     db.add(video_ad)
     db.commit()
     db.refresh(video_ad)
 
+    # -------------------------
+    # Response
+    # -------------------------
     return VideoAdResponse(
         id=video_ad.id,
-        video_url=get_s3_file_url(video_ad.video_path),
-        uploaded_at=video_ad.uploaded_at
+        video_url=(
+            get_s3_file_url(video_ad.video_path)
+            if video_ad.video_path
+            else None
+        ),
+        image_url=(
+            get_s3_file_url(video_ad.image_path)
+            if video_ad.image_path
+            else None
+        ),
+        uploaded_at=video_ad.uploaded_at,
     )
 
 
-# ---------------- Get All Videos ----------------
+
+# ---------------- Get Videos / Images ----------------
 
 @router.get("/videos", response_model=list[VideoAdResponse])
 def get_videos(
@@ -217,14 +286,26 @@ def get_videos(
     return [
         VideoAdResponse(
             id=v.id,
-            video_url=get_s3_file_url(v.video_path),
-            uploaded_at=v.uploaded_at
+
+            video_url=(
+                get_s3_file_url(v.video_path)
+                if v.video_path
+                else None
+            ),
+
+            image_url=(
+                get_s3_file_url(v.image_path)
+                if v.image_path
+                else None
+            ),
+
+            uploaded_at=v.uploaded_at,
         )
         for v in videos
     ]
 
 
-# ---------------- Delete Video ----------------
+# ---------------- Delete Video / Image ----------------
 
 @router.delete("/videos/{video_id}")
 def delete_video(
@@ -240,19 +321,33 @@ def delete_video(
     if not video_ad:
         raise HTTPException(
             status_code=404,
-            detail="Video not found"
+            detail="Video/Image not found"
         )
 
-    # Delete video from S3
-    try:
-        delete_file_from_s3(video_ad.video_path)
-    except Exception:
-        pass
+    # -------------------------
+    # Delete Video from S3
+    # -------------------------
+    if video_ad.video_path:
+        try:
+            delete_file_from_s3(video_ad.video_path)
+        except Exception:
+            pass
 
-    # Delete database record
+    # -------------------------
+    # Delete Image from S3
+    # -------------------------
+    if video_ad.image_path:
+        try:
+            delete_file_from_s3(video_ad.image_path)
+        except Exception:
+            pass
+
+    # -------------------------
+    # Delete Database Record
+    # -------------------------
     db.delete(video_ad)
     db.commit()
 
     return {
-        "detail": "Video deleted successfully"
+        "detail": "Video/Image deleted successfully"
     }

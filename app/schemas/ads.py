@@ -17,7 +17,8 @@ class AdResponse(AdBase):
     uploaded_at: str
 class VideoAdResponse(BaseModel):
     id: int
-    video_url: str
+    video_url: str | None = None
+    image_url: str | None = None
     uploaded_at: datetime
 
     class Config:
