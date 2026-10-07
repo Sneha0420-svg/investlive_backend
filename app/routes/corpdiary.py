@@ -99,18 +99,21 @@ async def upload_file(
 
         # ---------- DATE FIX ----------
         def parse_date_safe(x):
-            if x in (None, "", "nan"):
+            if x is None or pd.isna(x) or str(x).strip().lower() in ("", "nan", "nat"):
                 return None
-            for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+            value = str(x).strip()
+            formats = ("%d-%m-%Y","%Y-%m-%d","%d/%m/%Y","%m/%d/%Y","%d-%m-%y","%m/%d/%y",
+                       ) 
+            for fmt in formats:
                 try:
-                    return datetime.strptime(str(x), fmt).date()
-                except:
+                    return datetime.strptime(value, fmt).date()
+                except ValueError:
                     continue
             raise ValueError(f"Invalid date format: {x}")
-
         if "EX_DT" in df.columns:
-            df["EX_DT"] = df["EX_DT"].apply(parse_date_safe)
+            df["EX_DT"] = df["EX_DT"].apply(parse_date_safe)        
 
+       
         # ---------- Prepare ORM ----------
         model_columns = set(Model.__table__.columns.keys())
         objects = []
