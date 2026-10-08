@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import insert
 from datetime import datetime
 import csv
+from dateutil import parser
 
 from app.models.marketindgraph import MktGraph, MktGraphUploads
 from app.database import SessionLocal
@@ -60,7 +61,7 @@ def upload_mktgraph(
                 try:
                     rows_to_insert.append({
                         "SCRIP": row[0].strip(),
-                        "PR_DATE": datetime.strptime(row[1].strip(), "%Y-%m-%d").date(),
+                        "PR_DATE": parser.parse(row[1].strip(), dayfirst=False).date(),
                         "CUR_CH": float(row[2].strip()),
                         "DMA5": float(row[3].strip()),
                         "DMA21": float(row[4].strip()),

@@ -9,6 +9,7 @@ from app.models.volumemoving import VolumeMoving
 from app.database import SessionLocal
 from app.s3_utils import upload_file_to_s3, delete_file_from_s3, get_file_stream_from_s3
 import io
+from dateutil import parser
 router = APIRouter(prefix="/volumemoving", tags=["VolumeMoving"])
 
 
@@ -83,7 +84,7 @@ def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
                 # Auto parse date formats
                 date_str = str(row[5]).strip()
                 try:
-                    trn_date = datetime.strptime(date_str, "%d-%m-%Y").date()
+                    trn_date = parser.parse(date_str,dayfirst=False).date()
                 except ValueError:
                     trn_date = datetime.strptime(date_str, "%Y-%m-%d").date()
 
@@ -227,7 +228,10 @@ def delete_by_trn_date(
     db: Session = Depends(get_db)
 ):
     try:
-        date_obj = datetime.strptime(trn_date, "%Y-%m-%d").date()
+        date_obj = parser.parse(
+        trn_date,
+        dayfirst=False
+    ).date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 

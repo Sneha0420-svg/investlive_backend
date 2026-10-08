@@ -5,7 +5,7 @@ from sqlalchemy import func
 from datetime import date, timedelta, datetime
 import csv
 import io
-
+from dateutil import parser
 from app.models.pricemoving import PriceMoving
 from app.database import SessionLocal
 from app.s3_utils import upload_file_to_s3, get_s3_file_url  # S3 helper functions
@@ -48,8 +48,10 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     for row in reader:
         if len(row) != 10:
             continue  # skip invalid rows
+        date_text = row[9].strip()
+
         try:
-            trn_date = datetime.strptime(row[9].strip(), "%Y-%m-%d").date()
+            trn_date =  parser.parse(date_text,dayfirst=False ).date()
             isin = row[3].strip()
 
             # Use 0.0 as default for CMP if missing
@@ -207,7 +209,10 @@ def update_isin(
 @router.delete("/delete")
 def delete_by_trn_date(trn_date: str = Query(..., description="Date of the upload to delete"), db: Session = Depends(get_db)):
     try:
-        date_obj = datetime.strptime(trn_date, "%Y-%m-%d").date()
+        date_obj = parser.parse(
+        trn_date,
+        dayfirst=False
+    ).date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
