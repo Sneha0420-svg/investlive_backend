@@ -39,8 +39,26 @@ def get_db():
 
 # ---------------- Helper ----------------
 
+
 def clean_nan(val):
-    return None if isinstance(val, float) and math.isnan(val) else val
+    # Handle missing values
+    if val is None:
+        return None
+
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    # Handle NaN and positive/negative Infinity
+    if isinstance(val, (float, int)) and not isinstance(val, bool):
+        if not math.isfinite(val):
+            return None
+
+    # IMPORTANT: Preserve valid values such as strings,
+    # Decimal values, integers, and other normal objects.
+    return val
 
 
 def validate_category(category):
@@ -266,6 +284,8 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 
 # ---------------- Latest Data ----------------
 
+# ---------------- Latest Data ----------------
+
 @router.get("/latest/{category}")
 def get_latest_data(category: str, db: Session = Depends(get_db)):
 
@@ -281,7 +301,11 @@ def get_latest_data(category: str, db: Session = Depends(get_db)):
     )
 
     if not latest_upload:
-        return {"latest_data_date": None, "records": [], "count": 0}
+        return {
+            "latest_data_date": None,
+            "records": [],
+            "count": 0
+        }
 
     rows = db.query(DataModel).filter(
         DataModel.group_id == latest_upload.group_id
@@ -292,60 +316,19 @@ def get_latest_data(category: str, db: Session = Depends(get_db)):
     for r in rows:
         row = r.__dict__.copy()
         row.pop("_sa_instance_state", None)
+
+        # Clean every field before returning JSON
+        row = {
+            key: clean_nan(value)
+            for key, value in row.items()
+        }
+
         records.append(row)
 
     return {
         "latest_data_date": latest_upload.data_date,
         "records": records,
         "count": len(records)
-    }
-@router.get("/count/ch_per/{category}")
-def get_counts_by_ch_per(category: str, db: Session = Depends(get_db)):
-
-    if category not in ["up_down_mobile", "up_down_trend"]:
-        raise HTTPException(
-            400,
-            "Category must be 'up_down_mobile' or 'up_down_trend'"
-        )
-
-    UploadModel = CATEGORIES[category]["upload"]
-    DataModel = CATEGORIES[category]["data"]
-
-    latest_upload = (
-        db.query(UploadModel)
-        .order_by(UploadModel.data_date.desc())
-        .first()
-    )
-
-    if not latest_upload:
-        return {
-            "latest_data_date": None,
-            "total_count": 0,
-            "up_count": 0,
-            "down_count": 0
-        }
-
-    rows = db.query(DataModel).filter(
-        DataModel.group_id == latest_upload.group_id
-    ).all()
-
-    # count based on CH_PER
-    up_count = len([r for r in rows if getattr(r, "CH_PER", 0) > 0])
-    down_count = len([r for r in rows if getattr(r, "CH_PER", 0) < 0])
-
-    # assign meaningful labels
-    if category == "up_down_mobile":
-        up_label = "up_wardly_mobile"
-        down_label = "downhillpath"
-    else:
-        up_label = "up_trend"
-        down_label = "down_trend"
-
-    return {
-        "latest_data_date": latest_upload.data_date,
-        "total_count": len(rows),
-        up_label: up_count,
-        down_label: down_count
     }
 # ---------------- Download File ----------------
 

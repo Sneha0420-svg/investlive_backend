@@ -4,8 +4,10 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.staticfiles import StaticFiles
 import secrets
-import os
+from dotenv import load_dotenv
 
+import os
+from starlette.middleware.sessions import SessionMiddleware
 # =========================
 # IMPORT ROUTERS
 # =========================
@@ -48,15 +50,17 @@ from app.routes.purchase import router as purchase_router
 from app.routes.webhook import router as webhook_router
 from fastapi.middleware.gzip import GZipMiddleware
 
+load_dotenv()
 # =========================
 # APP INIT (DISABLE DEFAULT DOCS)
 # =========================
 app = FastAPI(
     title="Investlive API's",
     version="1.0.0",
-    docs_url=None,
-    redoc_url=None,
-    openapi_url="/api/openapi.json",
+    docs_url=None,          # disable default docs
+    redoc_url=None,         # disable default redoc
+    openapi_url="/openapi.json",
+    root_path="/api"
 )
 
 # =========================
@@ -65,25 +69,22 @@ app = FastAPI(
 os.makedirs("uploads/news", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-
 # =========================
 # CORS
 # =========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # change in production
+    allow_origins=["http://localhost:3000"],   # change in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="9f8s9df8s9df8s9df8s9df8s9df"
 )
 
-# =========================
-# GZIP
-# =========================
-app.add_middleware(
-    GZipMiddleware,
-    minimum_size=1000,   # Compress responses larger than 1 KB
-)
 
 # =========================
 # BASIC AUTH FOR DOCS
@@ -108,21 +109,20 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 # =========================
 # PROTECTED DOCS
 # =========================
-@app.get("/api/docs", include_in_schema=False)
+@app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/api/openapi.json", 
+        openapi_url="/openapi.json", 
         title="Investlive API Docs"
     )
 
-@app.get("/api/redoc", include_in_schema=False)
+@app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/api/openapi.json",
+        openapi_url="/openapi.json",
         
         title="Investlive ReDoc"
     )
-
 # =========================
 # ROOT
 # =========================
