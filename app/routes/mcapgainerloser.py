@@ -284,8 +284,6 @@ def get_uploads(category: str, db: Session = Depends(get_db)):
 
 # ---------------- Latest Data ----------------
 
-# ---------------- Latest Data ----------------
-
 @router.get("/latest/{category}")
 def get_latest_data(category: str, db: Session = Depends(get_db)):
 
@@ -330,6 +328,45 @@ def get_latest_data(category: str, db: Session = Depends(get_db)):
         "records": records,
         "count": len(records)
     }
+    
+def get_counts_by_ch_per(category: str, db: Session = Depends(get_db)):
+
+    if category not in ["up_down_mobile", "up_down_trend"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Category must be 'up_down_mobile' or 'up_down_trend'"
+        )
+
+    DataModel = CATEGORIES[category]["data"]
+
+    rows = db.query(DataModel).all()
+
+    if not rows:
+        return {
+            "total_count": 0,
+            "up_count": 0,
+            "down_count": 0
+        }
+
+    # count based on CH_PER
+    up_count = len([r for r in rows if getattr(r, "CH_PER", 0) > 0])
+    down_count = len([r for r in rows if getattr(r, "CH_PER", 0) < 0])
+
+    # labels
+    if category == "up_down_mobile":
+        up_label = "up_wardly_mobile"
+        down_label = "downhillpath"
+    else:
+        up_label = "up_trend"
+        down_label = "down_trend"
+
+    return {
+        "total_count": len(rows),
+        up_label: up_count,
+        down_label: down_count
+    }
+    
+
 # ---------------- Download File ----------------
 
 @router.get("/download/{category}/{group_id}")

@@ -112,17 +112,18 @@ def verify_docs(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_swagger_ui_html(
-        openapi_url="/openapi.json", 
-        title="Investlive API Docs"
+        openapi_url=app.openapi_url, 
+        title="Investlive API Docs",
+        oauth2_redirect_url="/api/docs/oauth2-redirect"
     )
 
 @app.get("/redoc", include_in_schema=False)
 def custom_redoc(credentials: HTTPBasicCredentials = Depends(verify_docs)):
     return get_redoc_html(
-        openapi_url="/openapi.json",
-        
+        openapi_url=app.openapi_url,
         title="Investlive ReDoc"
     )
+
 # =========================
 # ROOT
 # =========================
