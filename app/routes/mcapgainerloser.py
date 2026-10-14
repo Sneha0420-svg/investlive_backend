@@ -328,7 +328,7 @@ def get_latest_data(category: str, db: Session = Depends(get_db)):
         "records": records,
         "count": len(records)
     }
-    
+@router.get("/count/ch_per/{category}")    
 def get_counts_by_ch_per(category: str, db: Session = Depends(get_db)):
 
     if category not in ["up_down_mobile", "up_down_trend"]:
